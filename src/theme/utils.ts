@@ -102,6 +102,11 @@ export function applyTheme(themeName: ThemeName): void {
   setCSSVar('--foreground', colors.textPrimary);
   setCSSVar('--border', colors.borderColor);
   setCSSVar('--muted-foreground', colors.textMuted);
+  setCSSVar('--popover', colors.bgPrimary);
+  setCSSVar('--popover-foreground', colors.textPrimary);
+  setCSSVar('--accent', colors.bgSecondary);
+  setCSSVar('--accent-foreground', colors.textPrimary);
+  setCSSVar('--muted', colors.bgSecondary);
 }
 
 /**
