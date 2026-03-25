@@ -1,6 +1,7 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { useEffect, useRef, useState } from 'react';
 import { normalizeLanguage } from '@/lib/codeBlockUtils';
+import { Copy, Check, Trash2, ChevronDown } from 'lucide-react';
 
 let mermaidInitialized = false;
 let mermaidModule: typeof import('mermaid') | null = null;
@@ -12,7 +13,46 @@ const loadMermaid = async () => {
   return (mermaidModule as any).default ?? mermaidModule;
 };
 
-export function CodeBlockNodeView({ node }: NodeViewProps) {
+const COMMON_LANGUAGES: { value: string; label: string }[] = [
+  { value: 'plaintext', label: 'Plain Text' },
+  { value: 'bash', label: 'Bash' },
+  { value: 'c', label: 'C' },
+  { value: 'c++', label: 'C++' },
+  { value: 'csharp', label: 'C#' },
+  { value: 'css', label: 'CSS' },
+  { value: 'diff', label: 'Diff' },
+  { value: 'dockerfile', label: 'Dockerfile' },
+  { value: 'go', label: 'Go' },
+  { value: 'graphql', label: 'GraphQL' },
+  { value: 'html', label: 'HTML' },
+  { value: 'ini', label: 'INI' },
+  { value: 'java', label: 'Java' },
+  { value: 'javascript', label: 'JavaScript' },
+  { value: 'json', label: 'JSON' },
+  { value: 'kotlin', label: 'Kotlin' },
+  { value: 'markdown', label: 'Markdown' },
+  { value: 'mermaid', label: 'Mermaid' },
+  { value: 'php', label: 'PHP' },
+  { value: 'powershell', label: 'PowerShell' },
+  { value: 'python', label: 'Python' },
+  { value: 'ruby', label: 'Ruby' },
+  { value: 'rust', label: 'Rust' },
+  { value: 'scss', label: 'SCSS' },
+  { value: 'sql', label: 'SQL' },
+  { value: 'swift', label: 'Swift' },
+  { value: 'toml', label: 'TOML' },
+  { value: 'typescript', label: 'TypeScript' },
+  { value: 'xml', label: 'XML' },
+  { value: 'yaml', label: 'YAML' },
+];
+
+function getLanguageLabel(lang: string): string {
+  const found = COMMON_LANGUAGES.find((l) => l.value === lang);
+  if (found) return found.label;
+  return lang ? lang.charAt(0).toUpperCase() + lang.slice(1) : 'Plain Text';
+}
+
+export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeViewProps) {
   const language = normalizeLanguage(node.attrs.language || '');
   const isMermaid = language === 'mermaid';
   const code = node.textContent ?? '';
@@ -22,6 +62,12 @@ export function CodeBlockNodeView({ node }: NodeViewProps) {
   const [isRendering, setIsRendering] = useState(false);
   const mermaidRef = useRef<any | null>(null);
   const [mermaidReady, setMermaidReady] = useState(false);
+
+  const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [langDropdownOpen, setLangDropdownOpen] = useState(false);
+  const langDropdownRef = useRef<HTMLDivElement>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isMermaid) return;
@@ -91,9 +137,106 @@ export function CodeBlockNodeView({ node }: NodeViewProps) {
     };
   }, [code, isMermaid, mermaidReady]);
 
+  useEffect(() => {
+    if (!langDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (langDropdownRef.current && !langDropdownRef.current.contains(e.target as Node)) {
+        setLangDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [langDropdownOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  const toolbarVisible = hovered || langDropdownOpen;
+
+  const toolbar = (
+    <div
+      contentEditable={false}
+      className="absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm"
+    >
+      {/* Language selector */}
+      <div className="relative" ref={langDropdownRef}>
+        <button
+          type="button"
+          onClick={() => setLangDropdownOpen((v) => !v)}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <span>{getLanguageLabel(language)}</span>
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+        {langDropdownOpen && (
+          <div className="absolute right-0 top-full z-50 mt-1 max-h-60 min-w-[9rem] overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+            {COMMON_LANGUAGES.map((lang) => (
+              <button
+                key={lang.value}
+                type="button"
+                onClick={() => {
+                  updateAttributes({ language: lang.value });
+                  setLangDropdownOpen(false);
+                }}
+                className={`flex w-full cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground ${
+                  language === lang.value ? 'bg-accent text-accent-foreground' : ''
+                }`}
+              >
+                {lang.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Divider */}
+      <div className="mx-0.5 h-4 w-px bg-border" />
+
+      {/* Copy button */}
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        aria-label="Copy code"
+      >
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-green-500" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+      </button>
+
+      {/* Delete button */}
+      <button
+        type="button"
+        onClick={deleteNode}
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+        aria-label="Delete code block"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+
   if (!isMermaid) {
     return (
-      <NodeViewWrapper className="tiptap-codeblock">
+      <NodeViewWrapper
+        className="tiptap-codeblock"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        {toolbarVisible && toolbar}
         <pre className={`language-${language}`}>
           <NodeViewContent as="code" />
         </pre>
@@ -102,7 +245,12 @@ export function CodeBlockNodeView({ node }: NodeViewProps) {
   }
 
   return (
-    <NodeViewWrapper className="tiptap-codeblock tiptap-codeblock-mermaid">
+    <NodeViewWrapper
+      className="tiptap-codeblock tiptap-codeblock-mermaid"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {toolbarVisible && toolbar}
       <div className="mermaid-preview" contentEditable={false}>
         {isRendering && <div className="mermaid-status">Rendering diagram...</div>}
         {!isRendering && error && (
