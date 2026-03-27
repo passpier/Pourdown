@@ -11,6 +11,26 @@
     "fs:default",
     "fs:read-all",
     "fs:write-all",
-    "allow-all-commands"
+    "allow-read-markdown-file",
+    "allow-save-markdown-file",
+    "allow-list-directory",
+    "allow-get-recent-files",
+    "allow-add-recent-file",
+    "allow-create-file",
+    "allow-delete-file",
+    "allow-rename-file",
+    "allow-file-exists",
+    "allow-update-menu-item-state",
+    "allow-enable-menu-item",
+    "allow-import-document",
+    "allow-export-document",
+    "allow-take-pending-open-files",
+    "allow-get-os-platform",
+    "allow-get-system-locale",
+    "allow-get-language",
+    "allow-set-language",
+    "allow-get-user-settings",
+    "allow-save-language-preference",
+    "allow-search-in-files"
   ]
 }

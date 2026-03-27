@@ -38,10 +38,32 @@ export default defineConfig(async () => ({
   build: {
     // Tauri uses Chromium on Windows and WebKit on macOS and Linux
     target: process.env.TAURI_ENV_PLATFORM == "windows" ? "chrome105" : "safari13",
-    // don't minify for debug builds
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+    // terser provides deeper dead-code elimination than esbuild
+    minify: !process.env.TAURI_ENV_DEBUG ? "terser" : false,
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // mermaid is already dynamically imported per-block; this gives it a stable chunk name
+          mermaid: ["mermaid"],
+          tiptap: [
+            "@tiptap/core",
+            "@tiptap/react",
+            "@tiptap/starter-kit",
+            "@tiptap/extension-image",
+            "@tiptap/extension-placeholder",
+            "@tiptap/extension-table",
+            "@tiptap/extension-table-cell",
+            "@tiptap/extension-table-header",
+            "@tiptap/extension-table-row",
+            "@tiptap/extension-typography",
+          ],
+          lowlight: ["lowlight", "@tiptap/extension-code-block-lowlight"],
+          i18n: ["i18next", "react-i18next"],
+        },
+      },
+    },
   },
   optimizeDeps: {
     exclude: ["@tauri-apps/api", "@tauri-apps/plugin-fs", "@tauri-apps/plugin-dialog"],

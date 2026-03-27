@@ -1,12 +1,13 @@
 {
   "productName": "MarkBear",
-  "version": "0.3.6",
+  "version": "0.3.9",
   "identifier": "com.app.markbear",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "removeUnusedCommands": true
   },
   "app": {
     "windows": [

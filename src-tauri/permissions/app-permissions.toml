@@ -1,0 +1,104 @@
+[[permission]]
+identifier = "allow-read-markdown-file"
+description = "Allows the read_markdown_file command."
+commands.allow = ["read_markdown_file"]
+
+[[permission]]
+identifier = "allow-save-markdown-file"
+description = "Allows the save_markdown_file command."
+commands.allow = ["save_markdown_file"]
+
+[[permission]]
+identifier = "allow-list-directory"
+description = "Allows the list_directory command."
+commands.allow = ["list_directory"]
+
+[[permission]]
+identifier = "allow-get-recent-files"
+description = "Allows the get_recent_files command."
+commands.allow = ["get_recent_files"]
+
+[[permission]]
+identifier = "allow-add-recent-file"
+description = "Allows the add_recent_file command."
+commands.allow = ["add_recent_file"]
+
+[[permission]]
+identifier = "allow-create-file"
+description = "Allows the create_file command."
+commands.allow = ["create_file"]
+
+[[permission]]
+identifier = "allow-delete-file"
+description = "Allows the delete_file command."
+commands.allow = ["delete_file"]
+
+[[permission]]
+identifier = "allow-rename-file"
+description = "Allows the rename_file command."
+commands.allow = ["rename_file"]
+
+[[permission]]
+identifier = "allow-file-exists"
+description = "Allows the file_exists command."
+commands.allow = ["file_exists"]
+
+[[permission]]
+identifier = "allow-update-menu-item-state"
+description = "Allows the update_menu_item_state command."
+commands.allow = ["update_menu_item_state"]
+
+[[permission]]
+identifier = "allow-enable-menu-item"
+description = "Allows the enable_menu_item command."
+commands.allow = ["enable_menu_item"]
+
+[[permission]]
+identifier = "allow-import-document"
+description = "Allows the import_document command."
+commands.allow = ["import_document"]
+
+[[permission]]
+identifier = "allow-export-document"
+description = "Allows the export_document command."
+commands.allow = ["export_document"]
+
+[[permission]]
+identifier = "allow-take-pending-open-files"
+description = "Allows the take_pending_open_files command."
+commands.allow = ["take_pending_open_files"]
+
+[[permission]]
+identifier = "allow-get-os-platform"
+description = "Allows the get_os_platform command."
+commands.allow = ["get_os_platform"]
+
+[[permission]]
+identifier = "allow-get-system-locale"
+description = "Allows the get_system_locale command."
+commands.allow = ["get_system_locale"]
+
+[[permission]]
+identifier = "allow-get-language"
+description = "Allows the get_language command."
+commands.allow = ["get_language"]
+
+[[permission]]
+identifier = "allow-set-language"
+description = "Allows the set_language command."
+commands.allow = ["set_language"]
+
+[[permission]]
+identifier = "allow-get-user-settings"
+description = "Allows the get_user_settings command."
+commands.allow = ["get_user_settings"]
+
+[[permission]]
+identifier = "allow-save-language-preference"
+description = "Allows the save_language_preference command."
+commands.allow = ["save_language_preference"]
+
+[[permission]]
+identifier = "allow-search-in-files"
+description = "Allows the search_in_files command."
+commands.allow = ["search_in_files"]

@@ -1977,10 +1977,136 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the add_recent_file command.",
+          "type": "string",
+          "const": "allow-add-recent-file",
+          "markdownDescription": "Allows the add_recent_file command."
+        },
+        {
           "description": "Allow all custom commands in main.rs",
           "type": "string",
           "const": "allow-all-commands",
           "markdownDescription": "Allow all custom commands in main.rs"
+        },
+        {
+          "description": "Allows the create_file command.",
+          "type": "string",
+          "const": "allow-create-file",
+          "markdownDescription": "Allows the create_file command."
+        },
+        {
+          "description": "Allows the delete_file command.",
+          "type": "string",
+          "const": "allow-delete-file",
+          "markdownDescription": "Allows the delete_file command."
+        },
+        {
+          "description": "Allows the enable_menu_item command.",
+          "type": "string",
+          "const": "allow-enable-menu-item",
+          "markdownDescription": "Allows the enable_menu_item command."
+        },
+        {
+          "description": "Allows the export_document command.",
+          "type": "string",
+          "const": "allow-export-document",
+          "markdownDescription": "Allows the export_document command."
+        },
+        {
+          "description": "Allows the file_exists command.",
+          "type": "string",
+          "const": "allow-file-exists",
+          "markdownDescription": "Allows the file_exists command."
+        },
+        {
+          "description": "Allows the get_language command.",
+          "type": "string",
+          "const": "allow-get-language",
+          "markdownDescription": "Allows the get_language command."
+        },
+        {
+          "description": "Allows the get_os_platform command.",
+          "type": "string",
+          "const": "allow-get-os-platform",
+          "markdownDescription": "Allows the get_os_platform command."
+        },
+        {
+          "description": "Allows the get_recent_files command.",
+          "type": "string",
+          "const": "allow-get-recent-files",
+          "markdownDescription": "Allows the get_recent_files command."
+        },
+        {
+          "description": "Allows the get_system_locale command.",
+          "type": "string",
+          "const": "allow-get-system-locale",
+          "markdownDescription": "Allows the get_system_locale command."
+        },
+        {
+          "description": "Allows the get_user_settings command.",
+          "type": "string",
+          "const": "allow-get-user-settings",
+          "markdownDescription": "Allows the get_user_settings command."
+        },
+        {
+          "description": "Allows the import_document command.",
+          "type": "string",
+          "const": "allow-import-document",
+          "markdownDescription": "Allows the import_document command."
+        },
+        {
+          "description": "Allows the list_directory command.",
+          "type": "string",
+          "const": "allow-list-directory",
+          "markdownDescription": "Allows the list_directory command."
+        },
+        {
+          "description": "Allows the read_markdown_file command.",
+          "type": "string",
+          "const": "allow-read-markdown-file",
+          "markdownDescription": "Allows the read_markdown_file command."
+        },
+        {
+          "description": "Allows the rename_file command.",
+          "type": "string",
+          "const": "allow-rename-file",
+          "markdownDescription": "Allows the rename_file command."
+        },
+        {
+          "description": "Allows the save_language_preference command.",
+          "type": "string",
+          "const": "allow-save-language-preference",
+          "markdownDescription": "Allows the save_language_preference command."
+        },
+        {
+          "description": "Allows the save_markdown_file command.",
+          "type": "string",
+          "const": "allow-save-markdown-file",
+          "markdownDescription": "Allows the save_markdown_file command."
+        },
+        {
+          "description": "Allows the search_in_files command.",
+          "type": "string",
+          "const": "allow-search-in-files",
+          "markdownDescription": "Allows the search_in_files command."
+        },
+        {
+          "description": "Allows the set_language command.",
+          "type": "string",
+          "const": "allow-set-language",
+          "markdownDescription": "Allows the set_language command."
+        },
+        {
+          "description": "Allows the take_pending_open_files command.",
+          "type": "string",
+          "const": "allow-take-pending-open-files",
+          "markdownDescription": "Allows the take_pending_open_files command."
+        },
+        {
+          "description": "Allows the update_menu_item_state command.",
+          "type": "string",
+          "const": "allow-update-menu-item-state",
+          "markdownDescription": "Allows the update_menu_item_state command."
         },
         {
           "description": "Allow window dragging from custom titlebar",
