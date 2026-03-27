@@ -65,6 +65,42 @@ Create the desktop application:
 pnpm tauri build
 ```
 
+### Install an unsigned development desktop build
+
+Unsigned builds are intended for local testing only. For normal distribution, use code signing/notarization.
+
+#### macOS (`.dmg`)
+
+```bash
+# 1) Mount DMG
+hdiutil attach "MarkBear_0.3.5_aarch64.dmg"
+
+# 2) Copy app into Applications (adjust volume path if needed)
+cp -R "/Volumes/MarkBear/MarkBear.app" "/Applications/"
+
+# 3) Remove quarantine flag so macOS can open this unsigned app
+xattr -dr com.apple.quarantine "/Applications/MarkBear.app"
+
+# 4) Start app
+open -a "MarkBear"
+```
+
+If your DMG file is `MarkBear_0.3.5_x64.dmg`, use that filename in step 1.
+
+#### Windows (`.msi` or `.exe`)
+
+Open PowerShell in the folder containing the installer, then:
+
+```powershell
+# Optional: remove Mark-of-the-Web on downloaded file first
+Unblock-File .\MarkBear_0.3.5_x64_en-US.msi
+
+# Install MSI from CLI
+msiexec /i .\MarkBear_0.3.5_x64_en-US.msi
+```
+
+For `.exe` installers, SmartScreen may still require a one-time manual "More info" -> "Run anyway".
+
 ## License
 
 MIT
