@@ -24,7 +24,7 @@ calamine = { version = "0.33", features = ["dates"] }
 rust_xlsxwriter = "0.93"
 pulldown-cmark = "0.13"
 markdown2pdf = "0.2"
-pdf-extract = "0.10"
+pdfium-render = { version = "0.9", features = ["thread_safe"] }
 zip = "2"
 
 [features]
