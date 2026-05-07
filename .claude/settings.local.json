@@ -13,7 +13,9 @@
       "Bash(pnpm lint:*)",
       "Bash(code)",
       "Bash(find /Users/pingshengcheng/Home_Projects/MarkBear/node_modules/.pnpm/@tiptap+extension-table@2.27.2*/node_modules/@tiptap/extension-table/src -name \"*.ts\")",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Bash(cat)",
+      "Bash(node /tmp/test_frontmatter.js)"
     ]
   }
 }

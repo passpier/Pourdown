@@ -17,6 +17,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import { debounce } from '@/lib/utils';
+import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock } from '@/lib/frontmatterUtils';
 import '@/components/CodeBlockRenderer/CodeBlockRenderer.css';
 import { CodeBlockNodeView } from './CodeBlockNodeView';
 import { SearchExtension, type SearchStorage } from './searchExtension';
@@ -135,7 +136,7 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     },
     onUpdate: debounce(({ editor }) => {
       const markdown = (editor.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
-      updateContent(documentId, markdown);
+      updateContent(documentId, restoreFrontmatterFromCodeBlock(markdown));
     }, 500),
   });
 
@@ -146,14 +147,14 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
 
   // Update editor content when document changes
   useEffect(() => {
-    if (editor && document && (editor.storage['markdown'] as { getMarkdown: () => string }).getMarkdown() !== document.content) {
-      console.log('📄 Loading document content:', document.content.substring(0, 100) + '...');
-      
-      // Clear any old enhancement wrappers before setting content
-      editor.commands.clearContent();
-      editor.commands.setContent(document.content);
-      
-      console.log('✅ Document content loaded');
+    if (editor && document) {
+      const editorMarkdown = (editor.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
+      if (restoreFrontmatterFromCodeBlock(editorMarkdown) !== document.content) {
+        console.log('📄 Loading document content:', document.content.substring(0, 100) + '...');
+        editor.commands.clearContent();
+        editor.commands.setContent(injectFrontmatterAsCodeBlock(document.content));
+        console.log('✅ Document content loaded');
+      }
     }
   }, [document?.content, editor, documentId]);
 
