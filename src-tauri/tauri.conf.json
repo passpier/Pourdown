@@ -1,6 +1,6 @@
 {
   "productName": "MarkBear",
-  "version": "0.4.2",
+  "version": "0.4.5",
   "identifier": "com.app.markbear",
   "build": {
     "beforeDevCommand": "pnpm dev",

@@ -1,6 +1,6 @@
 # MarkBear
 
-A beautiful desktop Markdown editor with a clean, visual writing experience. Write and edit Markdown documents naturally.
+A desktop Markdown editor that turns your existing documents into clean, editable Markdown — import Word files, spreadsheets, PDFs, and presentations in one click, then write and edit with a live visual preview.
 
 ## Screenshots
 
@@ -11,13 +11,46 @@ A beautiful desktop Markdown editor with a clean, visual writing experience. Wri
   </tr>
 </table>
 
+## Import from Other Formats
+
+Most writing lives in Word documents, spreadsheets, or slide decks — formats that are hard to version-control, collaborate on, or publish as-is. MarkBear lets you import any of them directly into an editable Markdown document, so you can clean up, restructure, and export without manual copy-pasting.
+
+## Why Markdown Import?
+
+Files are converted to Markdown before processing to minimize token usage.
+Community benchmarks show Markdown is ~15% more token-efficient than JSON,
+and up to 96% more efficient than raw PDF when fed to LLMs
+
+**How to import:** File → Import → choose your format. The file opens immediately as a new Markdown document.
+
+<table>
+  <tr>
+    <td><img src="./screenshots/import_result.png" alt="Import result — Word document converted to Markdown" width="100%"></td>
+  </tr>
+</table>
+
+### What gets converted
+
+| Format | What's preserved | Known limitations |
+|--------|-----------------|-------------------|
+| **Word (.docx)** | Headings (styles + outline level), bold / italic / strikethrough, nested bullet and numbered lists, tables, hyperlinks | Images are skipped; tracked changes and comments are dropped; a TOC placeholder is inserted |
+| **Spreadsheet (.xlsx / .xls / .ods)** | Each sheet becomes a section with a full GFM table; date columns are auto-detected and formatted as ISO dates | Capped at 500 rows per sheet to keep the document manageable |
+| **PDF** | Headings inferred from font-size ratios; paragraph flow sorted top-to-bottom | Text-based PDFs only — scanned / image PDFs are not supported; complex multi-column layouts may reorder |
+| **PowerPoint (.pptx)** | Slide titles become `#` headings; body text becomes paragraphs, one slide per section | Images and animations are not captured |
+
+> Import converts content to Markdown. It is not a round-trip format converter — exporting back to the original format will not restore the original layout exactly.
+
 ## Features
 
+- **Document Import** — Convert Word, Excel, PDF, and PowerPoint files to Markdown in one click
 - **Visual Markdown Editing** — Write and edit Markdown the way you see it, without dealing with raw symbols
+- **Source Mode** — Toggle to raw Markdown text at any time
 - **File Management** — Open, save, and manage your Markdown files using native system dialogs
-- **Rich Text Formatting** — Bold, italic, lists, code blocks, blockquotes, and more — all at your fingertips
-- **Auto-save** — Your work is saved automatically at regular intervals, so you never lose progress
+- **Rich Text Formatting** — Bold, italic, lists, code blocks, blockquotes, and more
+- **Auto-save** — Your work is saved automatically at regular intervals
+- **Find & Replace** — In-document search with replace support; cross-file search in the sidebar
 - **Multiple Themes** — Choose from seven built-in UI themes
+- **i18n** — English and Traditional Chinese interface
 
 ## Tech Stack
 
@@ -73,7 +106,7 @@ Unsigned builds are intended for local testing only. For normal distribution, us
 
 ```bash
 # 1) Mount DMG
-hdiutil attach "MarkBear_0.3.5_aarch64.dmg"
+hdiutil attach "MarkBear_0.4.5_aarch64.dmg"
 
 # 2) Copy app into Applications (adjust volume path if needed)
 cp -R "/Volumes/MarkBear/MarkBear.app" "/Applications/"
@@ -85,7 +118,7 @@ xattr -dr com.apple.quarantine "/Applications/MarkBear.app"
 open -a "MarkBear"
 ```
 
-If your DMG file is `MarkBear_0.3.5_x64.dmg`, use that filename in step 1.
+If your DMG file is `MarkBear_0.4.5_x64.dmg`, use that filename in step 1.
 
 #### Windows (`.msi` or `.exe`)
 
@@ -93,10 +126,10 @@ Open PowerShell in the folder containing the installer, then:
 
 ```powershell
 # Optional: remove Mark-of-the-Web on downloaded file first
-Unblock-File .\MarkBear_0.3.5_x64_en-US.msi
+Unblock-File .\MarkBear_0.4.5_x64_en-US.msi
 
 # Install MSI from CLI
-msiexec /i .\MarkBear_0.3.5_x64_en-US.msi
+msiexec /i .\MarkBear_0.4.5_x64_en-US.msi
 ```
 
 For `.exe` installers, SmartScreen may still require a one-time manual "More info" -> "Run anyway".
