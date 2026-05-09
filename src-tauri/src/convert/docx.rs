@@ -127,26 +127,43 @@ fn is_ordered_format(val: &str) -> bool {
 }
 
 fn paragraph_to_markdown(para: &Paragraph, num_map: &HashMap<usize, bool>) -> String {
-    // Detect heading level from style ID
-    let heading_prefix = para
-        .property
-        .style
-        .as_ref()
-        .map(|s| {
-            match s.val.to_lowercase().as_str() {
-                "heading1" | "heading 1" => "# ",
-                "heading2" | "heading 2" => "## ",
-                "heading3" | "heading 3" => "### ",
-                "heading4" | "heading 4" => "#### ",
-                "heading5" | "heading 5" => "##### ",
-                "heading6" | "heading 6" => "###### ",
-                _ => "",
-            }
-        })
-        .unwrap_or("");
+    let style_id = para.property.style.as_ref().map(|s| s.val.to_lowercase());
+    let style_str = style_id.as_deref().unwrap_or("");
 
-    // Detect list prefix from numbering property
-    let list_prefix = if heading_prefix.is_empty() {
+    let heading_prefix: &str = match style_str {
+        "heading1" | "heading 1" | "1" => "# ",
+        "heading2" | "heading 2" | "2" => "## ",
+        "heading3" | "heading 3" | "3" => "### ",
+        "heading4" | "heading 4" | "4" => "#### ",
+        "heading5" | "heading 5" | "5" => "##### ",
+        "heading6" | "heading 6" | "6" => "###### ",
+        "subtitle" => "## ",
+        _ => "",
+    };
+
+    // "title" style renders as bold text, not as a heading level
+    let is_title = style_str == "title";
+
+    // Fallback: use outline level when the style ID isn't a known heading
+    let heading_prefix = if heading_prefix.is_empty() && !is_title {
+        para.property
+            .outline_lvl
+            .as_ref()
+            .map(|o| match o.v {
+                0 => "# ",
+                1 => "## ",
+                2 => "### ",
+                3 => "#### ",
+                4 => "##### ",
+                5 => "###### ",
+                _ => "", // levels 6–9 are body text in DOCX, not headings
+            })
+            .unwrap_or("")
+    } else {
+        heading_prefix
+    };
+
+    let list_prefix = if heading_prefix.is_empty() && !is_title {
         para.property.numbering_property.as_ref().map(|np| {
             let num_id = np.id.as_ref().map(|i| i.id).unwrap_or(0);
             let level = np.level.as_ref().map(|l| l.val).unwrap_or(0);
@@ -162,72 +179,119 @@ fn paragraph_to_markdown(para: &Paragraph, num_map: &HashMap<usize, bool>) -> St
         None
     };
 
-    let mut text = String::new();
+    // Collect (text, bold, italic, strike) segments from all paragraph children
+    let mut segments: Vec<(String, bool, bool, bool)> = Vec::new();
+
     for child in &para.children {
         match child {
-            ParagraphChild::Run(run) => text.push_str(&run_to_markdown(run)),
+            ParagraphChild::Run(run) => {
+                if let Some(seg) = run_to_segment(run, is_title) {
+                    segments.push(seg);
+                }
+            }
             ParagraphChild::Hyperlink(hyperlink) => {
                 let mut inner = String::new();
                 for c in &hyperlink.children {
                     if let ParagraphChild::Run(r) = c {
-                        inner.push_str(&run_to_markdown(r));
+                        inner.push_str(&run_raw_text(r));
                     }
                 }
                 if !inner.is_empty() {
-                    match &hyperlink.link {
+                    let linked = match &hyperlink.link {
                         HyperlinkData::External { path, .. } => {
-                            text.push_str(&format!("[{}]({})", inner, path));
+                            format!("[{}]({})", inner, path)
                         }
-                        HyperlinkData::Anchor { .. } => {
-                            // Internal anchors are dead links in exported markdown — emit plain text.
-                            text.push_str(&inner);
-                        }
-                    }
+                        // Internal anchors are dead links in exported markdown — plain text.
+                        HyperlinkData::Anchor { .. } => inner,
+                    };
+                    segments.push((linked, false, false, false));
                 }
             }
             _ => {}
         }
     }
 
+    // Merge adjacent segments with identical formatting to prevent `****` artifacts
+    let mut merged: Vec<(String, bool, bool, bool)> = Vec::new();
+    for seg in segments {
+        if let Some(last) = merged.last_mut() {
+            if last.1 == seg.1 && last.2 == seg.2 && last.3 == seg.3 {
+                last.0.push_str(&seg.0);
+                continue;
+            }
+        }
+        merged.push(seg);
+    }
+
+    let mut text = String::new();
+    for (t, bold, italic, strike) in merged {
+        text.push_str(&apply_inline_fmt(&t, bold, italic, strike));
+    }
+
     if text.is_empty() {
         return String::new();
     }
 
+    let page_break = if para.property.page_break_before == Some(true) {
+        "---\n\n"
+    } else {
+        ""
+    };
+
     match list_prefix {
-        Some(prefix) => format!("{}{}", prefix, text),
-        None => format!("{}{}", heading_prefix, text),
+        Some(prefix) => format!("{}{}{}", page_break, prefix, text),
+        None => format!("{}{}{}", page_break, heading_prefix, text),
     }
 }
 
-fn run_to_markdown(run: &Run) -> String {
+/// Extract raw text from a run (no markdown markers).
+fn run_raw_text(run: &Run) -> String {
     let mut text = String::new();
     for child in &run.children {
         match child {
             RunChild::Text(t) => text.push_str(&t.text),
-            RunChild::Tab(_) => text.push('\t'),
-            // Skip images and other complex children
+            RunChild::Tab(_) => text.push(' '),
             _ => {}
         }
     }
+    text
+}
 
+/// Return a single (text, bold, italic, strike) segment for a run, or None if empty.
+fn run_to_segment(run: &Run, force_bold: bool) -> Option<(String, bool, bool, bool)> {
+    let text = run_raw_text(run);
     if text.is_empty() {
-        return String::new();
+        return None;
     }
-
-    // Don't apply bold/italic markers to whitespace-only runs — produces
-    // `** **` artifacts that markdown parsers escape as literal `\*\* \*\*`.
-    if text.trim().is_empty() {
-        return text;
-    }
-
-    let bold = run.run_property.bold.is_some();
+    let bold = force_bold || run.run_property.bold.is_some();
     let italic = run.run_property.italic.is_some();
+    let strike = run.run_property.strike.as_ref().map(|s| s.val).unwrap_or(false)
+        || run.run_property.dstrike.as_ref().map(|d| d.val).unwrap_or(false);
+    Some((text, bold, italic, strike))
+}
 
+/// Apply bold/italic/strikethrough markers, skipping whitespace-only text.
+fn apply_inline_fmt(text: &str, bold: bool, italic: bool, strike: bool) -> String {
+    if text.trim().is_empty() {
+        return text.to_string();
+    }
+    let s = if strike {
+        format!("~~{}~~", text)
+    } else {
+        text.to_string()
+    };
     match (bold, italic) {
-        (true, true) => format!("***{}***", text),
-        (true, false) => format!("**{}**", text),
-        (false, true) => format!("*{}*", text),
-        (false, false) => text,
+        (true, true) => format!("***{}***", s),
+        (true, false) => format!("**{}**", s),
+        (false, true) => format!("*{}*", s),
+        (false, false) => s,
+    }
+}
+
+fn run_to_markdown(run: &Run) -> String {
+    match run_to_segment(run, false) {
+        None => String::new(),
+        Some((text, bold, italic, strike)) => apply_inline_fmt(&text, bold, italic, strike),
     }
 }
 
