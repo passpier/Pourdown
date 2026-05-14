@@ -36,8 +36,6 @@ impl AppState {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct UserSettings {
     language: String,
-    #[serde(default)]
-    source_mode: bool,
 }
 
 impl UserSettings {
@@ -88,8 +86,12 @@ impl UserSettings {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read settings file: {}", e))?;
 
-            let settings: UserSettings = serde_json::from_str(&content)
+            // Use a permissive intermediate value so unknown fields (e.g. old
+            // `source_mode`) are silently ignored rather than causing a parse error.
+            let raw: serde_json::Value = serde_json::from_str(&content)
                 .map_err(|e| format!("Failed to parse settings: {}", e))?;
+            let settings: UserSettings = serde_json::from_value(raw)
+                .map_err(|e| format!("Failed to deserialize settings: {}", e))?;
 
             println!("📂 Settings loaded from: {}", path.display());
             Ok(Some(settings))
@@ -546,8 +548,8 @@ fn set_language(state: State<AppState>, lang: String) -> Result<(), String> {
  */
 #[tauri::command]
 fn get_user_settings() -> Result<UserSettings, String> {
-    let settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string(), source_mode: false });
-    println!("📂 User settings retrieved: language={}, source_mode={}", settings.language, settings.source_mode);
+    let settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string() });
+    println!("📂 User settings retrieved: language={}", settings.language);
     Ok(settings)
 }
 
@@ -560,7 +562,7 @@ fn save_language_preference(lang: String, state: State<AppState>) -> Result<(), 
     let normalized_lang = normalize_language(&lang);
 
     // Load existing settings (to preserve other settings if any)
-    let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string(), source_mode: false });
+    let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string() });
     
     // Update language
     settings.language = normalized_lang.clone();
@@ -690,14 +692,8 @@ fn emit_editor_command(app: &tauri::AppHandle, command: &str, level: Option<u8>)
  * Used by menu event handlers
  */
 fn save_language_to_storage(lang: &str) -> Result<(), String> {
-    let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string(), source_mode: false });
+    let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string() });
     settings.language = lang.to_string();
-    settings.save()
-}
-
-fn save_source_mode_to_storage(mode: bool) -> Result<(), String> {
-    let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string(), source_mode: false });
-    settings.source_mode = mode;
     settings.save()
 }
 
@@ -985,14 +981,14 @@ fn main() {
     // 2. Fall back to system locale
     // 3. Default to English
     
-    let (default_language, default_source_mode) = match UserSettings::load() {
+    let default_language = match UserSettings::load() {
         Ok(Some(settings)) => {
-            println!("✅ User settings loaded from storage: language={}, source_mode={}", settings.language, settings.source_mode);
-            (settings.language, settings.source_mode)
+            println!("✅ User settings loaded from storage: language={}", settings.language);
+            settings.language
         }
         Ok(None) => {
             // First launch — no saved preference; detect system locale
-            let lang = match tauri_plugin_os::locale() {
+            match tauri_plugin_os::locale() {
                 Some(locale_str) => {
                     let normalized = normalize_language(&locale_str);
                     println!("🌍 No saved preference; using system locale: {} → normalized to: {}",
@@ -1003,13 +999,12 @@ fn main() {
                     println!("⚠️ System locale not available, using default: English");
                     "en".to_string()
                 }
-            };
-            (lang, false)
+            }
         }
         Err(e) => {
             println!("⚠️ Failed to load user settings: {}", e);
             // Settings file is corrupt or unreadable; fall back to system locale
-            let lang = match tauri_plugin_os::locale() {
+            match tauri_plugin_os::locale() {
                 Some(locale_str) => {
                     let normalized = normalize_language(&locale_str);
                     println!("🌍 Falling back to system locale: {} → normalized to: {}",
@@ -1020,8 +1015,7 @@ fn main() {
                     println!("⚠️ System locale not available, using default: English");
                     "en".to_string()
                 }
-            };
-            (lang, false)
+            }
         }
     };
     
@@ -1033,7 +1027,7 @@ fn main() {
             let paths = collect_open_paths(argv);
             queue_open_files(app, paths);
         }))
-        .manage(AppState::new(default_language.clone(), default_source_mode))
+        .manage(AppState::new(default_language.clone(), false))
         .setup(|app| {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
             let paths = collect_open_paths(args);
@@ -1064,10 +1058,6 @@ fn main() {
                 } else {
                     false
                 };
-                // Persist the new source_mode value
-                if let Err(e) = save_source_mode_to_storage(new_mode) {
-                    println!("❌ Failed to save source_mode preference: {}", e);
-                }
                 // Explicitly confirm the checkmark state (do not rely solely on macOS auto-toggle)
                 if let Some(menu) = app.menu() {
                     if let Some(item) = menu.get("view_source_code") {

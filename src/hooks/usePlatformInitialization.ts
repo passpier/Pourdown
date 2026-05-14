@@ -18,7 +18,6 @@ import { useSettingsStore } from '@/stores/settingsStore';
  */
 export function usePlatformInitialization() {
   const setOsPlatform = useUIStore((state) => state.setOsPlatform);
-  const setEditorMode = useUIStore((state) => state.setEditorMode);
   const { language, updateSettings } = useSettingsStore();
   const initStartedRef = useRef(false);
 
@@ -39,13 +38,10 @@ export function usePlatformInitialization() {
         
         try {
           // Query backend for user settings (stored in config directory)
-          const userSettings = await invoke<{ language: string; source_mode: boolean }>('get_user_settings');
+          const userSettings = await invoke<{ language: string }>('get_user_settings');
           if (isActive && userSettings?.language) {
             console.log(`📂 User language preference loaded from backend: ${userSettings.language}`);
             updateSettings({ language: userSettings.language });
-          }
-          if (isActive && userSettings?.source_mode !== undefined) {
-            setEditorMode(userSettings.source_mode ? 'source' : 'wysiwyg');
           }
         } catch (settingsError) {
           console.warn('Failed to load user settings from backend:', settingsError);
@@ -97,5 +93,5 @@ export function usePlatformInitialization() {
       isActive = false;
       unlistenInit?.();
     };
-  }, [setOsPlatform, setEditorMode, language, updateSettings]);
+  }, [setOsPlatform, language, updateSettings]);
 }
