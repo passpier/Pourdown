@@ -1,97 +1,323 @@
+use std::collections::HashMap;
 use super::ConversionError;
 
 /// Convert a PPTX file to Markdown.
-/// Each slide's text content becomes a section.
+/// Each slide becomes a section separated by `---`.
 pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
-    // Parse PPTX as a ZIP archive and extract text from slide XML
+    use std::io::Read;
+
     let file = std::fs::File::open(path)
         .map_err(|e| ConversionError(format!("Failed to open PPTX: {}", e)))?;
 
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| ConversionError(format!("Failed to read PPTX archive: {}", e)))?;
 
-    let mut slides: Vec<(usize, String)> = Vec::new();
+    // Collect rels and slide XML in a single pass
+    let mut rels_map: HashMap<usize, String> = HashMap::new();
+    let mut slides_raw: Vec<(usize, String)> = Vec::new();
 
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| ConversionError(format!("Failed to read archive entry: {}", e)))?;
-
         let name = entry.name().to_string();
-        // Slide XML files are at ppt/slides/slide{N}.xml
-        if !name.starts_with("ppt/slides/slide") || !name.ends_with(".xml") {
+
+        if name.starts_with("ppt/slides/_rels/slide") && name.ends_with(".xml.rels") {
+            let num: usize = name
+                .trim_start_matches("ppt/slides/_rels/slide")
+                .trim_end_matches(".xml.rels")
+                .parse()
+                .unwrap_or(0);
+            if num > 0 {
+                let mut content = String::new();
+                entry
+                    .read_to_string(&mut content)
+                    .map_err(|e| ConversionError(format!("Failed to read rels: {}", e)))?;
+                rels_map.insert(num, content);
+            }
+        } else if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+            let num: usize = name
+                .trim_start_matches("ppt/slides/slide")
+                .trim_end_matches(".xml")
+                .parse()
+                .unwrap_or(0);
+            if num > 0 {
+                let mut content = String::new();
+                entry
+                    .read_to_string(&mut content)
+                    .map_err(|e| ConversionError(format!("Failed to read slide XML: {}", e)))?;
+                slides_raw.push((num, content));
+            }
+        }
+    }
+
+    slides_raw.sort_by_key(|(n, _)| *n);
+
+    let mut parts: Vec<String> = Vec::new();
+    for (num, xml) in &slides_raw {
+        let rels = rels_map
+            .get(num)
+            .map(|r| parse_slide_rels(r))
+            .unwrap_or_default();
+        let text = extract_slide_content(xml, &rels);
+        if !text.is_empty() {
+            parts.push(text);
+        }
+    }
+
+    Ok(parts.join("\n\n---\n\n"))
+}
+
+/// Parse a slide rels XML and return a map of rId → image filename.
+/// Only image relationships are included.
+fn parse_slide_rels(rels_xml: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for chunk in rels_xml.split("<Relationship ") {
+        if !chunk.contains("/image") {
+            continue;
+        }
+        if let (Some(id), Some(target)) = (get_xml_attr(chunk, "Id"), get_xml_attr(chunk, "Target")) {
+            let filename = target.rsplit('/').next().unwrap_or(&target).to_string();
+            map.insert(id, filename);
+        }
+    }
+    map
+}
+
+/// Extract the value of a named XML attribute from a fragment.
+fn get_xml_attr(s: &str, attr: &str) -> Option<String> {
+    let search = format!("{}=\"", attr);
+    if let Some(pos) = s.find(&search) {
+        let after = &s[pos + search.len()..];
+        if let Some(end) = after.find('"') {
+            return Some(after[..end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract slide content: title (as `# heading`), image placeholders, and body paragraphs.
+fn extract_slide_content(xml: &str, rels: &HashMap<String, String>) -> String {
+    // Strip the slide background block so its image embeds aren't treated as content images
+    let stripped: String;
+    let xml: &str = if let Some(bg_start) = xml.find("<p:bg>").or_else(|| xml.find("<p:bg ")) {
+        if let Some(rel_end) = xml[bg_start..].find("</p:bg>") {
+            stripped = format!(
+                "{}{}",
+                &xml[..bg_start],
+                &xml[bg_start + rel_end + "</p:bg>".len()..]
+            );
+            &stripped
+        } else {
+            xml
+        }
+    } else {
+        xml
+    };
+
+    // Collect content-image placeholders from r:embed references (deduplicated)
+    let mut image_placeholders: Vec<String> = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = xml[search_from..].find("r:embed=\"") {
+        let abs = search_from + pos + 9;
+        if let Some(end) = xml[abs..].find('"') {
+            let rid = &xml[abs..abs + end];
+            if let Some(fname) = rels.get(rid) {
+                let placeholder = format!("[Image: {}]", fname);
+                if !image_placeholders.contains(&placeholder) {
+                    image_placeholders.push(placeholder);
+                }
+            }
+        }
+        search_from = abs;
+    }
+
+    // Extract title from a placeholder shape (<p:ph type="title"> or "ctrTitle") if present
+    let ph_title = find_placeholder_title(xml);
+
+    // Extract all paragraphs from the slide, building the body
+    let (fallback_title, body) = extract_paragraphs(xml, ph_title.as_deref());
+
+    let title = ph_title.as_deref().or(fallback_title.as_deref());
+
+    let mut output = String::new();
+
+    if let Some(t) = title {
+        if !t.is_empty() {
+            output.push_str(&format!("# {}", t));
+        }
+    }
+
+    for img in &image_placeholders {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(img);
+    }
+
+    if !body.is_empty() {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&body);
+    }
+
+    output.trim().to_string()
+}
+
+/// Look for a `<p:sp>` containing `<p:ph type="title"` or `type="ctrTitle"` and return its text.
+fn find_placeholder_title(xml: &str) -> Option<String> {
+    let markers = [r#"type="title""#, r#"type="ctrTitle""#];
+    for marker in &markers {
+        if let Some(marker_pos) = xml.find(marker) {
+            // Find the enclosing <p:sp> start by scanning backward
+            let prefix = &xml[..marker_pos];
+            if let Some(sp_start) = prefix.rfind("<p:sp") {
+                // Find the closing </p:sp> after the marker
+                if let Some(rel_end) = xml[sp_start..].find("</p:sp>") {
+                    let sp_block = &xml[sp_start..sp_start + rel_end + "</p:sp>".len()];
+                    let text = collect_runs_text(sp_block);
+                    if !text.is_empty() {
+                        return Some(text.trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Collect all `<a:t>` text from a block, concatenating runs within each paragraph with spaces.
+fn collect_runs_text(block: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for para_chunk in block.split("<a:p>").skip(1) {
+        let para_end = para_chunk.find("</a:p>").unwrap_or(para_chunk.len());
+        let para = &para_chunk[..para_end];
+        let text = extract_run_text_plain(para);
+        if !text.is_empty() {
+            parts.push(text);
+        }
+    }
+    parts.join(" ")
+}
+
+/// Extract plain concatenated text from all `<a:t>` tags within a paragraph block.
+fn extract_run_text_plain(para: &str) -> String {
+    let mut result = String::new();
+    for part in para.split("<a:t>").skip(1) {
+        if let Some(end) = part.find("</a:t>") {
+            result.push_str(&xml_decode(&part[..end]));
+        }
+    }
+    result.trim().to_string()
+}
+
+/// Extract paragraphs from ALL shapes on the slide.
+/// The `known_title` text is excluded from the body (to avoid duplication).
+/// Returns (first_para_as_fallback_title, body_text).
+fn extract_paragraphs(xml: &str, known_title: Option<&str>) -> (Option<String>, String) {
+    let mut first_para: Option<String> = None;
+    let mut body_parts: Vec<(bool, usize, String)> = Vec::new(); // (is_bullet, level, text)
+
+    for para_chunk in xml.split("<a:p>").skip(1) {
+        let para_end = para_chunk.find("</a:p>").unwrap_or(para_chunk.len());
+        let para = &para_chunk[..para_end];
+
+        // Check bullet: presence of <a:buNone means NOT a bullet
+        let has_bu_none = para.contains("<a:buNone");
+        let is_bullet = !has_bu_none;
+
+        // Indentation level
+        let level = get_xml_attr(para, "lvl")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        // Build run text with inline formatting
+        let text = extract_run_text_formatted(para);
+        let trimmed = text.trim().to_string();
+
+        if trimmed.is_empty() {
             continue;
         }
 
-        // Extract slide number from filename
-        let slide_num: usize = name
-            .trim_start_matches("ppt/slides/slide")
-            .trim_end_matches(".xml")
-            .parse()
-            .unwrap_or(0);
+        // Skip if this text is the known title (avoid duplication)
+        if let Some(kt) = known_title {
+            if trimmed == kt {
+                continue;
+            }
+        }
 
-        let mut content = String::new();
-        use std::io::Read;
-        entry
-            .read_to_string(&mut content)
-            .map_err(|e| ConversionError(format!("Failed to read slide XML: {}", e)))?;
-
-        let text = extract_text_from_slide_xml(&content);
-        if !text.is_empty() {
-            slides.push((slide_num, text));
+        if known_title.is_none() && first_para.is_none() {
+            first_para = Some(trimmed);
+        } else {
+            body_parts.push((is_bullet, level, trimmed));
         }
     }
 
-    // Sort slides by number
-    slides.sort_by_key(|(n, _)| *n);
+    // Build body string with proper Markdown paragraph/bullet separators
+    let mut body = String::new();
+    let mut last_was_bullet = false;
 
-    let mut output = String::new();
-    for (i, (_, text)) in slides.iter().enumerate() {
-        if i > 0 {
-            output.push('\n');
+    for (is_bullet, level, text) in &body_parts {
+        if *is_bullet {
+            let indent = "  ".repeat(*level);
+            let sep = if last_was_bullet { "\n" } else if body.is_empty() { "" } else { "\n\n" };
+            body.push_str(&format!("{}{}- {}", sep, indent, text));
+            last_was_bullet = true;
+        } else {
+            let sep = if body.is_empty() { "" } else { "\n\n" };
+            body.push_str(&format!("{}{}", sep, text));
+            last_was_bullet = false;
         }
-        output.push_str(text);
-        output.push('\n');
     }
 
-    Ok(output)
+    (first_para, body)
 }
 
-/// Extract plain text from PPTX slide XML.
-/// Looks for <a:t> tags which contain the actual text content.
-fn extract_text_from_slide_xml(xml: &str) -> String {
-    let mut output = String::new();
-    let mut first_para = true;
+/// Extract text from a paragraph's runs with basic bold/italic Markdown formatting.
+fn extract_run_text_formatted(para: &str) -> String {
+    let mut result = String::new();
+    for run_chunk in para.split("<a:r>").skip(1) {
+        let run_end = run_chunk.find("</a:r>").unwrap_or(run_chunk.len());
+        let run = &run_chunk[..run_end];
 
-    // Simple XML text extraction: find <a:t>...</a:t> within <a:p> blocks
-    for para in xml.split("<a:p>") {
-        let mut para_text = String::new();
-        for part in para.split("<a:t>") {
-            if let Some(end) = part.find("</a:t>") {
-                let text = &part[..end];
-                // Decode basic XML entities
-                let decoded = text
-                    .replace("&amp;", "&")
-                    .replace("&lt;", "<")
-                    .replace("&gt;", ">")
-                    .replace("&quot;", "\"")
-                    .replace("&apos;", "'");
-                para_text.push_str(&decoded);
-            }
-        }
-        let trimmed = para_text.trim().to_string();
-        if !trimmed.is_empty() {
-            if first_para {
-                // First non-empty paragraph becomes a heading
-                output.push_str(&format!("# {}\n", trimmed));
-                first_para = false;
-            } else {
-                output.push_str(&format!("\n{}", trimmed));
+        // Detect bold/italic from <a:rPr> tag
+        let (is_bold, is_italic) = if let Some(rpr_start) = run.find("<a:rPr") {
+            let rpr_end = run[rpr_start..].find('>').unwrap_or(run.len() - rpr_start);
+            let rpr = &run[rpr_start..rpr_start + rpr_end];
+            let bold = rpr.contains(" b=\"1\"") || rpr.contains("\tb=\"1\"");
+            let italic = rpr.contains(" i=\"1\"") || rpr.contains("\ti=\"1\"");
+            (bold, italic)
+        } else {
+            (false, false)
+        };
+
+        // Extract text content
+        if let Some(t_start) = run.find("<a:t>") {
+            let after = &run[t_start + 5..];
+            if let Some(t_end) = after.find("</a:t>") {
+                let text = xml_decode(&after[..t_end]);
+                if !text.is_empty() {
+                    let formatted = match (is_bold, is_italic) {
+                        (true, true) => format!("***{}***", text),
+                        (true, false) => format!("**{}**", text),
+                        (false, true) => format!("_{}_", text),
+                        (false, false) => text,
+                    };
+                    result.push_str(&formatted);
+                }
             }
         }
     }
+    result
+}
 
-    output
+fn xml_decode(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
 }
 
 /// Convert Markdown to a PPTX file.
