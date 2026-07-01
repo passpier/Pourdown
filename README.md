@@ -1,6 +1,15 @@
 # MarkBear
 
-A desktop Markdown editor that turns your existing documents into clean, editable Markdown — import Word files, spreadsheets, PDFs, and presentations in one click, then write and edit with a live visual preview.
+**Turn any document into clean, editable Markdown.**
+
+[![GitHub release](https://img.shields.io/github/v/release/passpier/MarkBear?label=Download&color=0969da)](https://github.com/passpier/MarkBear/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](#install-an-unsigned-development-desktop-build)
+[![Website](https://img.shields.io/badge/website-passpier.github.io%2FMarkBear-blue)](https://passpier.github.io/MarkBear/)
+
+A desktop Markdown editor that imports Word files, spreadsheets, PDFs, and presentations in one click, then lets you write and edit with a live visual preview — free, offline, and open source.
+
+**🌐 Website:** https://passpier.github.io/MarkBear/
 
 ## Screenshots
 
@@ -102,13 +111,16 @@ pnpm tauri build
 
 Unsigned builds are intended for local testing only. For normal distribution, use code signing/notarization.
 
+Download the installer for your platform from the [latest release](https://github.com/passpier/MarkBear/releases/latest), then open a terminal **in the folder containing the downloaded file** and run the commands below. The `*` glob matches any version — no edits needed when a new release ships.
+
 #### macOS (`.dmg`)
 
 ```bash
-# 1) Mount DMG
-hdiutil attach "MarkBear_0.4.5_aarch64.dmg"
+# 1) Mount DMG  (Apple Silicon)
+hdiutil attach MarkBear_*_aarch64.dmg
+# On Intel Mac use: hdiutil attach MarkBear_*_x64.dmg
 
-# 2) Copy app into Applications (adjust volume path if needed)
+# 2) Copy app into Applications
 cp -R "/Volumes/MarkBear/MarkBear.app" "/Applications/"
 
 # 3) Remove quarantine flag so macOS can open this unsigned app
@@ -118,21 +130,19 @@ xattr -dr com.apple.quarantine "/Applications/MarkBear.app"
 open -a "MarkBear"
 ```
 
-If your DMG file is `MarkBear_0.4.5_x64.dmg`, use that filename in step 1.
+> **Note:** download only the `.dmg` for your architecture so the glob matches exactly one file.
 
 #### Windows (`.msi` or `.exe`)
 
 Open PowerShell in the folder containing the installer, then:
 
 ```powershell
-# Optional: remove Mark-of-the-Web on downloaded file first
-Unblock-File .\MarkBear_0.4.5_x64_en-US.msi
-
-# Install MSI from CLI
-msiexec /i .\MarkBear_0.4.5_x64_en-US.msi
+# Remove Mark-of-the-Web and install in one step
+Get-ChildItem MarkBear_*_x64_en-US.msi | Unblock-File
+msiexec /i (Get-ChildItem MarkBear_*_x64_en-US.msi).FullName
 ```
 
-For `.exe` installers, SmartScreen may still require a one-time manual "More info" -> "Run anyway".
+For `.exe` installers, SmartScreen may still require a one-time manual "More info" → "Run anyway".
 
 ## License
 
