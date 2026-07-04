@@ -149,6 +149,28 @@
   @apply min-h-screen p-8 focus:outline-none;
 }
 
+/* Map @tailwindcss/typography's prose tokens to our theme variables so
+   body text, bold text, list markers, and table cells follow the active
+   theme instead of prose's hardcoded light-mode grays. */
+.tiptap.prose {
+  --tw-prose-body: hsl(var(--text-primary));
+  --tw-prose-headings: hsl(var(--text-heading));
+  --tw-prose-lead: hsl(var(--text-muted));
+  --tw-prose-bold: hsl(var(--text-primary));
+  --tw-prose-links: hsl(var(--link-color));
+  --tw-prose-counters: hsl(var(--text-muted));
+  --tw-prose-bullets: hsl(var(--text-muted));
+  --tw-prose-hr: hsl(var(--border-color));
+  --tw-prose-quotes: hsl(var(--text-muted));
+  --tw-prose-quote-borders: hsl(var(--border-blockquote));
+  --tw-prose-captions: hsl(var(--text-muted));
+  --tw-prose-code: hsl(var(--syntax-keyword));
+  --tw-prose-pre-bg: hsl(var(--bg-code));
+  --tw-prose-pre-code: hsl(var(--text-primary));
+  --tw-prose-th-borders: hsl(var(--border-color));
+  --tw-prose-td-borders: hsl(var(--border-color));
+}
+
 .tiptap.ProseMirror-focused {
   @apply outline-none;
 }

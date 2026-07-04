@@ -107,6 +107,22 @@ export function applyTheme(themeName: ThemeName): void {
   setCSSVar('--accent', colors.bgSecondary);
   setCSSVar('--accent-foreground', colors.textPrimary);
   setCSSVar('--muted', colors.bgSecondary);
+
+  // Sidebar (paper cards) and code line-number vars — previously hardcoded
+  // to light-mode values in index.css and never updated per theme.
+  setCSSVar('--sidebar-bg', colors.bgSecondary);
+  setCSSVar('--sidebar-surface', colors.bgPrimary);
+  setCSSVar('--sidebar-surface-strong', colors.bgSecondary);
+  setCSSVar('--sidebar-border', colors.borderColor);
+  setCSSVar('--sidebar-highlight-bg', colors.linkColor);
+  setCSSVar('--line-highlight-bg', colors.borderMuted);
+  setCSSVar('--line-number-color', colors.textMuted);
+
+  // Toggle Tailwind's `.dark` class and native color-scheme so `dark:`
+  // utilities and native form controls/scrollbars follow the selected
+  // theme (the app never switches theme via OS preference alone).
+  root.classList.toggle('dark', theme.variant === 'dark');
+  root.style.colorScheme = theme.variant;
 }
 
 /**
