@@ -191,24 +191,44 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   // Restore the position (fractional viewport-top between two bracketing
   // headings) left behind when switching from source mode into WYSIWYG mode.
   // Declared after the scroll-reset effect above so it runs later in the same
-  // commit and wins over the default reset-to-top. Waits until the editor's
-  // content actually reflects this document (frontmatter injection may still
-  // be pending), and defers measurement a frame so async layout (code
-  // highlighting, tables) has settled.
+  // commit and wins over the default reset-to-top.
+  //
+  // This used to gate on `restoreFrontmatterFromCodeBlock(editor.getMarkdown())
+  // === document.content` to wait for the "load content" effect above to
+  // finish. But Tiptap's markdown round-trip normalises whitespace/escaping/
+  // fences, so for documents with raw HTML, escaped characters, or nested
+  // fences that equality is never byte-exact — the gate silently never
+  // passed, restore never ran, and the mount's reset-to-top effect won by
+  // default. The editor already receives `document.content` as its initial
+  // `content` (see `useEditor` above), so there's nothing to wait for here;
+  // only the `hasRestoredAnchorRef` guard is needed to run this once.
+  //
+  // What *does* still need waiting for is async layout: code-block
+  // highlighting and the `CodeBlockNodeView` React node views reflow after
+  // mount, shifting heading Y positions for a few frames on code-heavy docs.
+  // So the restore re-measures and re-applies scrollTop across a few frames
+  // instead of trusting a single measurement.
+  //
+  // `pendingAnchor` is consumed *inside* the deferred rAF, not synchronously
+  // in the effect body, and `hasRestoredAnchorRef` is only flipped once that
+  // consumption actually happens. Reason: React StrictMode mounts this
+  // effect, tears it down, and mounts it again as a purity check. The
+  // synthetic teardown cancels this run's rAF chain before it ever fires
+  // (`cancelled = true`), so if consumption happened synchronously up front,
+  // the anchor would be gone and `hasRestoredAnchorRef` would already be
+  // true by the second (real) mount — permanently skipping the restore.
+  // Deferring both means the synthetic pass's rAF is cancelled before doing
+  // anything, and the second, real mount performs the one-and-only restore.
   const hasRestoredAnchorRef = useRef(false);
   useEffect(() => {
     if (hasRestoredAnchorRef.current) return;
     if (!editor || !document) return;
 
-    const editorMarkdown = (editor.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
-    if (restoreFrontmatterFromCodeBlock(editorMarkdown) !== document.content) return;
+    let cancelled = false;
+    const settleFrames = 4;
 
-    hasRestoredAnchorRef.current = true;
-
-    const anchor = consumePendingAnchor();
-    if (!anchor || anchor.documentId !== documentId) return;
-
-    requestAnimationFrame(() => {
+    const apply = (framesLeft: number, anchor: NonNullable<ReturnType<typeof consumePendingAnchor>>) => {
+      if (cancelled) return;
       const container = containerRef.current;
       if (!container) return;
 
@@ -232,7 +252,25 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
           return true;
         });
       }
+      editor.commands.focus(undefined, { scrollIntoView: false });
+
+      if (framesLeft > 0) {
+        requestAnimationFrame(() => apply(framesLeft - 1, anchor));
+      }
+    };
+
+    requestAnimationFrame(() => {
+      if (cancelled || hasRestoredAnchorRef.current) return;
+      hasRestoredAnchorRef.current = true;
+
+      const anchor = consumePendingAnchor();
+      if (!anchor || anchor.documentId !== documentId) return;
+
+      apply(settleFrames, anchor);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [editor, document, documentId, consumePendingAnchor, measureHeadingLandmarks]);
 
   // Capture the current position when this editor unmounts (i.e. the user
@@ -249,8 +287,28 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   // already removed, at which point getBoundingClientRect() on the container
   // and every heading returns an all-zero rect, collapsing every landmark to
   // the same Y and producing a garbage anchor.
+  //
+  // Gated on `captureReadyRef`, set one animation frame after mount: React
+  // StrictMode mounts every component, tears it down, and mounts it again as
+  // a purity check, and that synthetic teardown runs this cleanup
+  // *synchronously* — before any frame has elapsed and before the anchor
+  // restore effect above has actually applied its scroll position. Without
+  // this guard, that synthetic cleanup would capture the not-yet-restored
+  // (or not-yet-laid-out) state and overwrite a still-pending, correct
+  // anchor with a bogus one. A real unmount (the user switching modes) always
+  // happens well after that first frame, so it captures normally.
+  const captureReadyRef = useRef(false);
   useLayoutEffect(() => {
+    captureReadyRef.current = false;
+    const raf = requestAnimationFrame(() => {
+      captureReadyRef.current = true;
+    });
     return () => {
+      cancelAnimationFrame(raf);
+      const wasReady = captureReadyRef.current;
+      captureReadyRef.current = false;
+      if (!wasReady) return;
+
       const ed = editorRef.current;
       const container = containerRef.current;
       if (!ed || !container) return;

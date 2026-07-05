@@ -9,6 +9,7 @@ import {
   computeSegmentAnchor,
   resolveSegmentScrollTop,
   measureTextareaLineOffsets,
+  findAnchorHeading,
   type HeadingLandmark,
 } from '@/lib/editorAnchor';
 import { FindBar } from './FindBar';
@@ -83,25 +84,93 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   // headings) left behind when switching from WYSIWYG mode into source mode.
   // Runs once on mount only — it should not re-fire when the user simply
   // edits or switches documents.
+  //
+  // The textarea's width is driven by `layoutMetrics.contentWidth`, which is
+  // computed by `useEditorLayout`'s *passive* effect and is still 0 on this
+  // component's first layout-effect pass (mount). Measuring line-wrap
+  // against a 0-width textarea collapses every heading to a garbage Y, which
+  // is what made the restored position drift/jump to the top on every
+  // toggle. So the actual measurement is deferred to a requestAnimationFrame,
+  // retrying a frame later if the textarea still hasn't been laid out with a
+  // real width yet.
+  //
+  // Consuming `pendingAnchor` is *also* deferred into that same rAF (instead
+  // of reading it synchronously here) because React StrictMode mounts this
+  // effect, tears it down, and mounts it again as a purity check. If the
+  // anchor were consumed synchronously in the first (synthetic) pass, it
+  // would be gone by the second (real) pass, and the capture-on-unmount
+  // effect below would (if not itself guarded) overwrite it with a bogus
+  // "top of document" anchor in between — which is exactly what caused the
+  // restored position to land at the top / drift on every toggle.
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    const anchor = consumePendingAnchor();
-    if (!anchor || anchor.documentId !== documentIdRef.current) return;
 
-    const text = contentRef.current;
-    const headings = scanMarkdownHeadings(text);
-    const landmarks = measureLandmarks(textarea, text, headings);
-    const contentHeight = textarea.scrollHeight;
+    let cancelled = false;
+    let anchor: ReturnType<typeof consumePendingAnchor> | 'unconsumed' = 'unconsumed';
 
-    textarea.scrollTop = resolveSegmentScrollTop(landmarks, anchor, contentHeight);
+    const attemptRestore = (retriesLeft: number) => {
+      if (cancelled) return;
+      if (anchor === 'unconsumed') {
+        anchor = consumePendingAnchor();
+      }
+      const resolvedAnchor = anchor;
+      if (!resolvedAnchor || resolvedAnchor.documentId !== documentIdRef.current) return;
+
+      const ta = textareaRef.current;
+      if (!ta) return;
+      if (ta.clientWidth === 0 && retriesLeft > 0) {
+        requestAnimationFrame(() => attemptRestore(retriesLeft - 1));
+        return;
+      }
+
+      const text = contentRef.current;
+      const headings = scanMarkdownHeadings(text);
+      const landmarks = measureLandmarks(ta, text, headings);
+      const contentHeight = ta.scrollHeight;
+
+      const lowerLandmark = resolvedAnchor.lower ? findAnchorHeading(landmarks, resolvedAnchor.lower) : undefined;
+      const lowerHeading = lowerLandmark ? headings.find((h) => h.index === lowerLandmark.index) : undefined;
+
+      // Place the caret before scrolling: focusing the textarea can itself
+      // scroll it into view, which would fight the scrollTop set below.
+      if (lowerHeading) {
+        textarea.setSelectionRange(lowerHeading.charOffset, lowerHeading.charOffset);
+      }
+      textarea.scrollTop = resolveSegmentScrollTop(landmarks, resolvedAnchor, contentHeight);
+      textarea.focus({ preventScroll: true });
+    };
+
+    requestAnimationFrame(() => attemptRestore(3));
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Capture the current position when this editor unmounts (i.e. the user
   // switches to WYSIWYG mode), so it can be restored on the way back.
+  //
+  // Gated on `readyRef`, set one animation frame after mount: React
+  // StrictMode's synthetic mount→cleanup→mount cycle runs this cleanup
+  // *synchronously*, before any frame has elapsed, so `readyRef.current` is
+  // still `false` at that point and the capture is skipped. A real unmount
+  // (the user actually switching modes) always happens well after that first
+  // frame, so it captures normally. Without this guard, the synthetic
+  // cleanup would overwrite the still-pending, not-yet-restored anchor with
+  // a bogus one measured from the not-yet-laid-out textarea.
+  const readyRef = useRef(false);
   useLayoutEffect(() => {
+    readyRef.current = false;
+    const raf = requestAnimationFrame(() => {
+      readyRef.current = true;
+    });
     return () => {
+      cancelAnimationFrame(raf);
+      const wasReady = readyRef.current;
+      readyRef.current = false;
+      if (!wasReady) return;
+
       const textarea = textareaRef.current;
       if (!textarea) return;
 
