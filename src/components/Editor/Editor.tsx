@@ -11,14 +11,14 @@ import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import { createLowlight, common } from 'lowlight';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import { debounce } from '@/lib/utils';
 import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock } from '@/lib/frontmatterUtils';
-import { findAnchorHeading } from '@/lib/editorAnchor';
+import { computeSegmentAnchor, resolveSegmentScrollTop, findAnchorHeading, type HeadingLandmark } from '@/lib/editorAnchor';
 import '@/components/CodeBlockRenderer/CodeBlockRenderer.css';
 import { CodeBlockNodeView } from './CodeBlockNodeView';
 import { SearchExtension, type SearchStorage } from './searchExtension';
@@ -168,11 +168,33 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     }
   }, [documentId]);
 
-  // Restore the position (nearest heading, or scroll ratio) left behind when
-  // switching from source mode into WYSIWYG mode. Declared after the
-  // scroll-reset effect above so it runs later in the same commit and wins
-  // over the default reset-to-top. Waits until the editor's content actually
-  // reflects this document (frontmatter injection may still be pending).
+  // Measure each heading's pixel Y in container-scroll coordinates, so it's
+  // comparable across captures/restores despite async layout (images, code
+  // highlighting, tables) shifting positions between them.
+  const measureHeadingLandmarks = useCallback((ed: NonNullable<typeof editor>, container: HTMLDivElement): HeadingLandmark[] => {
+    const containerTop = container.getBoundingClientRect().top - container.scrollTop;
+    const landmarks: HeadingLandmark[] = [];
+    let ordinal = -1;
+    ed.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'heading') {
+        ordinal += 1;
+        const dom = ed.view.nodeDOM(pos);
+        const el = dom instanceof HTMLElement ? dom : dom?.parentElement;
+        const y = el ? el.getBoundingClientRect().top - containerTop : 0;
+        landmarks.push({ index: ordinal, text: node.textContent, y });
+      }
+      return true;
+    });
+    return landmarks;
+  }, []);
+
+  // Restore the position (fractional viewport-top between two bracketing
+  // headings) left behind when switching from source mode into WYSIWYG mode.
+  // Declared after the scroll-reset effect above so it runs later in the same
+  // commit and wins over the default reset-to-top. Waits until the editor's
+  // content actually reflects this document (frontmatter injection may still
+  // be pending), and defers measurement a frame so async layout (code
+  // highlighting, tables) has settled.
   const hasRestoredAnchorRef = useRef(false);
   useEffect(() => {
     if (hasRestoredAnchorRef.current) return;
@@ -186,32 +208,32 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     const anchor = consumePendingAnchor();
     if (!anchor || anchor.documentId !== documentId) return;
 
-    if (anchor.headingIndex >= 0) {
-      const headingNodes: { index: number; pos: number; text: string }[] = [];
-      let ordinal = -1;
-      editor.state.doc.descendants((node, pos) => {
-        if (node.type.name === 'heading') {
-          ordinal += 1;
-          headingNodes.push({ index: ordinal, pos, text: node.textContent });
-        }
-        return true;
-      });
+    requestAnimationFrame(() => {
+      const container = containerRef.current;
+      if (!container) return;
 
-      const target = findAnchorHeading(headingNodes, anchor);
+      const landmarks = measureHeadingLandmarks(editor, container);
+      const contentHeight = container.scrollHeight;
+      container.scrollTop = resolveSegmentScrollTop(landmarks, anchor, contentHeight);
 
-      if (target) {
-        editor.chain().focus().setTextSelection(target.pos + 1).scrollIntoView().run();
-        return;
+      // Keep the caret near the restored position for continuity, without
+      // re-triggering a scroll (scrollIntoView would fight the value above).
+      const lowerTarget = anchor.lower ? findAnchorHeading(landmarks, anchor.lower) : undefined;
+      if (lowerTarget) {
+        let ordinal = -1;
+        editor.state.doc.descendants((node, pos) => {
+          if (node.type.name === 'heading') {
+            ordinal += 1;
+            if (ordinal === lowerTarget.index) {
+              editor.commands.setTextSelection(pos + 1);
+              return false;
+            }
+          }
+          return true;
+        });
       }
-    }
-
-    // Fallback: no matching heading, apply the captured scroll ratio.
-    if (containerRef.current) {
-      const el = containerRef.current;
-      const maxScroll = el.scrollHeight - el.clientHeight;
-      el.scrollTop = maxScroll > 0 ? anchor.scrollRatio * maxScroll : 0;
-    }
-  }, [editor, document, documentId, consumePendingAnchor]);
+    });
+  }, [editor, document, documentId, consumePendingAnchor, measureHeadingLandmarks]);
 
   // Capture the current position when this editor unmounts (i.e. the user
   // switches to source mode), so it can be restored on the way back.
@@ -219,38 +241,27 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   editorRef.current = editor;
   const documentIdRef = useRef(documentId);
   documentIdRef.current = documentId;
-  useEffect(() => {
+  const measureHeadingLandmarksRef = useRef(measureHeadingLandmarks);
+  measureHeadingLandmarksRef.current = measureHeadingLandmarks;
+  // useLayoutEffect (not useEffect) is required here: its cleanup runs
+  // synchronously during the commit, before React detaches this subtree's
+  // DOM. A plain useEffect's cleanup fires asynchronously after the DOM is
+  // already removed, at which point getBoundingClientRect() on the container
+  // and every heading returns an all-zero rect, collapsing every landmark to
+  // the same Y and producing a garbage anchor.
+  useLayoutEffect(() => {
     return () => {
       const ed = editorRef.current;
-      if (!ed) return;
-
-      const selectionFrom = ed.state.selection.from;
-      let ordinal = -1;
-      let headingIndex = -1;
-      let headingText = '';
-      ed.state.doc.descendants((node, pos) => {
-        if (node.type.name === 'heading') {
-          ordinal += 1;
-          if (pos <= selectionFrom) {
-            headingIndex = ordinal;
-            headingText = node.textContent;
-          }
-        }
-        return true;
-      });
-
-      let scrollRatio = 0;
       const container = containerRef.current;
-      if (container) {
-        const maxScroll = container.scrollHeight - container.clientHeight;
-        scrollRatio = maxScroll > 0 ? container.scrollTop / maxScroll : 0;
-      }
+      if (!ed || !container) return;
+
+      const landmarks = measureHeadingLandmarksRef.current(ed, container);
+      const contentHeight = container.scrollHeight;
+      const anchor = computeSegmentAnchor(landmarks, container.scrollTop, contentHeight);
 
       setPendingAnchor({
         documentId: documentIdRef.current,
-        headingIndex,
-        headingText,
-        scrollRatio,
+        ...anchor,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

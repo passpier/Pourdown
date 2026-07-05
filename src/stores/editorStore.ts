@@ -1,15 +1,8 @@
 import { create } from 'zustand';
 import type { Editor } from '@tiptap/react';
+import type { EditorAnchor } from '@/lib/editorAnchor';
 
-export interface EditorAnchor {
-  documentId: string;
-  /** Ordinal of the nearest heading at/above the cursor; -1 if none */
-  headingIndex: number;
-  /** Heading text, used to validate the anchor still makes sense on restore */
-  headingText: string;
-  /** Fallback: fraction (0-1) of the way through the scrollable content */
-  scrollRatio: number;
-}
+export type { EditorAnchor };
 
 interface EditorState {
   editor: Editor | null;

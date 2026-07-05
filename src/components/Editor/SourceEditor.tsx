@@ -4,7 +4,13 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
-import { scanMarkdownHeadings, nearestHeadingBeforeOffset, headingLineToScrollTop, findAnchorHeading } from '@/lib/editorAnchor';
+import {
+  scanMarkdownHeadings,
+  computeSegmentAnchor,
+  resolveSegmentScrollTop,
+  measureTextareaLineOffsets,
+  type HeadingLandmark,
+} from '@/lib/editorAnchor';
 import { FindBar } from './FindBar';
 
 interface SourceEditorProps {
@@ -65,31 +71,30 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
     }
   }, [documentId]);
 
-  // Restore the position (nearest heading, or scroll ratio) left behind when
-  // switching from WYSIWYG mode into source mode. Runs once on mount only —
-  // it should not re-fire when the user simply edits or switches documents.
+  // Measure each heading's pixel Y within the textarea's own content flow
+  // (accounting for soft-wrapping), producing landmarks comparable to the
+  // WYSIWYG editor's own measurements of the *same* headings.
+  const measureLandmarks = useCallback((textarea: HTMLTextAreaElement, text: string, headings: ReturnType<typeof scanMarkdownHeadings>): HeadingLandmark[] => {
+    const ys = measureTextareaLineOffsets(textarea, text, headings.map((h) => h.charOffset));
+    return headings.map((h, i) => ({ index: h.index, text: h.text, y: ys[i] }));
+  }, []);
+
+  // Restore the position (fractional viewport-top between two bracketing
+  // headings) left behind when switching from WYSIWYG mode into source mode.
+  // Runs once on mount only — it should not re-fire when the user simply
+  // edits or switches documents.
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const anchor = consumePendingAnchor();
     if (!anchor || anchor.documentId !== documentIdRef.current) return;
 
-    const headings = scanMarkdownHeadings(contentRef.current);
-    const lineHeight = parseInt(getComputedStyle(textarea).lineHeight || '20', 10) || 20;
+    const text = contentRef.current;
+    const headings = scanMarkdownHeadings(text);
+    const landmarks = measureLandmarks(textarea, text, headings);
+    const contentHeight = textarea.scrollHeight;
 
-    if (anchor.headingIndex >= 0) {
-      const target = findAnchorHeading(headings, anchor);
-      if (target) {
-        textarea.focus();
-        textarea.setSelectionRange(target.charOffset, target.charOffset);
-        textarea.scrollTop = headingLineToScrollTop(target.line, lineHeight);
-        return;
-      }
-    }
-
-    // Fallback: no matching heading, apply the captured scroll ratio.
-    const maxScroll = textarea.scrollHeight - textarea.clientHeight;
-    textarea.scrollTop = maxScroll > 0 ? anchor.scrollRatio * maxScroll : 0;
+    textarea.scrollTop = resolveSegmentScrollTop(landmarks, anchor, contentHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -102,17 +107,13 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
 
       const text = contentRef.current;
       const headings = scanMarkdownHeadings(text);
-      const offset = textarea.selectionStart ?? 0;
-      const headingIndex = nearestHeadingBeforeOffset(headings, offset);
-      const heading = headings.find((h) => h.index === headingIndex);
-      const maxScroll = textarea.scrollHeight - textarea.clientHeight;
-      const scrollRatio = maxScroll > 0 ? textarea.scrollTop / maxScroll : 0;
+      const landmarks = measureLandmarks(textarea, text, headings);
+      const contentHeight = textarea.scrollHeight;
 
+      const anchor = computeSegmentAnchor(landmarks, textarea.scrollTop, contentHeight);
       setPendingAnchor({
         documentId: documentIdRef.current,
-        headingIndex,
-        headingText: heading?.text ?? '',
-        scrollRatio,
+        ...anchor,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
