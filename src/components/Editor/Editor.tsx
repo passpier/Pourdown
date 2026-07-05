@@ -18,6 +18,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import { debounce } from '@/lib/utils';
 import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock } from '@/lib/frontmatterUtils';
+import { findAnchorHeading } from '@/lib/editorAnchor';
 import '@/components/CodeBlockRenderer/CodeBlockRenderer.css';
 import { CodeBlockNodeView } from './CodeBlockNodeView';
 import { SearchExtension, type SearchStorage } from './searchExtension';
@@ -34,6 +35,8 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const fontSize = useUIStore((state) => state.fontSize);
   const fontFamily = useUIStore((state) => state.fontFamily);
   const setEditor = useEditorStore((state) => state.setEditor);
+  const setPendingAnchor = useEditorStore((state) => state.setPendingAnchor);
+  const consumePendingAnchor = useEditorStore((state) => state.consumePendingAnchor);
   const findBarVisible = useUIStore((state) => state.findBarVisible);
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -164,6 +167,94 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       containerRef.current.scrollTop = 0;
     }
   }, [documentId]);
+
+  // Restore the position (nearest heading, or scroll ratio) left behind when
+  // switching from source mode into WYSIWYG mode. Declared after the
+  // scroll-reset effect above so it runs later in the same commit and wins
+  // over the default reset-to-top. Waits until the editor's content actually
+  // reflects this document (frontmatter injection may still be pending).
+  const hasRestoredAnchorRef = useRef(false);
+  useEffect(() => {
+    if (hasRestoredAnchorRef.current) return;
+    if (!editor || !document) return;
+
+    const editorMarkdown = (editor.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
+    if (restoreFrontmatterFromCodeBlock(editorMarkdown) !== document.content) return;
+
+    hasRestoredAnchorRef.current = true;
+
+    const anchor = consumePendingAnchor();
+    if (!anchor || anchor.documentId !== documentId) return;
+
+    if (anchor.headingIndex >= 0) {
+      const headingNodes: { index: number; pos: number; text: string }[] = [];
+      let ordinal = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'heading') {
+          ordinal += 1;
+          headingNodes.push({ index: ordinal, pos, text: node.textContent });
+        }
+        return true;
+      });
+
+      const target = findAnchorHeading(headingNodes, anchor);
+
+      if (target) {
+        editor.chain().focus().setTextSelection(target.pos + 1).scrollIntoView().run();
+        return;
+      }
+    }
+
+    // Fallback: no matching heading, apply the captured scroll ratio.
+    if (containerRef.current) {
+      const el = containerRef.current;
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      el.scrollTop = maxScroll > 0 ? anchor.scrollRatio * maxScroll : 0;
+    }
+  }, [editor, document, documentId, consumePendingAnchor]);
+
+  // Capture the current position when this editor unmounts (i.e. the user
+  // switches to source mode), so it can be restored on the way back.
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const documentIdRef = useRef(documentId);
+  documentIdRef.current = documentId;
+  useEffect(() => {
+    return () => {
+      const ed = editorRef.current;
+      if (!ed) return;
+
+      const selectionFrom = ed.state.selection.from;
+      let ordinal = -1;
+      let headingIndex = -1;
+      let headingText = '';
+      ed.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'heading') {
+          ordinal += 1;
+          if (pos <= selectionFrom) {
+            headingIndex = ordinal;
+            headingText = node.textContent;
+          }
+        }
+        return true;
+      });
+
+      let scrollRatio = 0;
+      const container = containerRef.current;
+      if (container) {
+        const maxScroll = container.scrollHeight - container.clientHeight;
+        scrollRatio = maxScroll > 0 ? container.scrollTop / maxScroll : 0;
+      }
+
+      setPendingAnchor({
+        documentId: documentIdRef.current,
+        headingIndex,
+        headingText,
+        scrollRatio,
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Apply font settings and responsive layout
   useEffect(() => {
