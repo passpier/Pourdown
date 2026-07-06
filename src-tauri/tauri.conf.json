@@ -1,7 +1,7 @@
 {
-  "productName": "MarkBear",
-  "version": "0.4.6",
-  "identifier": "com.app.markbear",
+  "productName": "Pourdown",
+  "version": "0.5.0",
+  "identifier": "com.app.pourdown",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MarkBear",
+        "title": "Pourdown",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "width": 1200,

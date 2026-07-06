@@ -42,9 +42,9 @@ impl UserSettings {
     /**
      * Get the path to the settings file in the app's config directory
      * Uses platform-specific config directories:
-     * - macOS: ~/Library/Application Support/MarkBear
-     * - Windows: C:\Users\{User}\AppData\Local\MarkBear
-     * - Linux: ~/.config/MarkBear
+     * - macOS: ~/Library/Application Support/Pourdown
+     * - Windows: C:\Users\{User}\AppData\Local\Pourdown
+     * - Linux: ~/.config/Pourdown
      */
     fn config_path() -> Result<PathBuf, String> {
         let config_dir = if cfg!(target_os = "macos") {
@@ -63,13 +63,24 @@ impl UserSettings {
                 .map_err(|_| "Failed to get HOME directory".to_string())?;
             PathBuf::from(home).join(".config")
         };
-        
-        let app_config_dir = config_dir.join("MarkBear");
-        
+
+        let app_config_dir = config_dir.join("Pourdown");
+
+        // One-time migration: if this is the first launch under the new name
+        // and a config directory from the old "MarkBear" name still exists,
+        // move it over so existing users keep their settings. Best-effort —
+        // if it fails for any reason, just fall through and create fresh.
+        if !app_config_dir.exists() {
+            let legacy_config_dir = config_dir.join("MarkBear");
+            if legacy_config_dir.exists() {
+                let _ = fs::rename(&legacy_config_dir, &app_config_dir);
+            }
+        }
+
         // Create directory if it doesn't exist
         fs::create_dir_all(&app_config_dir)
             .map_err(|e| format!("Failed to create config directory: {}", e))?;
-        
+
         Ok(app_config_dir.join("settings.json"))
     }
 
@@ -174,12 +185,12 @@ fn get_label(lang: &str, key: &str) -> String {
             "file_export_xlsx" => "匯出為試算表 (.xlsx)...".to_string(),
             "file_export_pdf"  => "匯出為 PDF...".to_string(),
             "file_export_pptx" => "匯出為 PowerPoint (.pptx)...".to_string(),
-            "app_about" => "關於 MarkBear".to_string(),
+            "app_about" => "關於 Pourdown".to_string(),
             "app_services" => "服務".to_string(),
-            "app_hide" => "隱藏 MarkBear".to_string(),
+            "app_hide" => "隱藏 Pourdown".to_string(),
             "app_hide_others" => "隱藏其他".to_string(),
             "app_show_all" => "全部顯示".to_string(),
-            "app_quit" => "結束 MarkBear".to_string(),
+            "app_quit" => "結束 Pourdown".to_string(),
             "window_minimize" => "縮到最小".to_string(),
             "window_zoom" => "縮放".to_string(),
             "window_fullscreen" => "切換全螢幕".to_string(),
@@ -241,12 +252,12 @@ fn get_label(lang: &str, key: &str) -> String {
             "file_export_xlsx" => "Export as Spreadsheet (.xlsx)...".to_string(),
             "file_export_pdf"  => "Export as PDF...".to_string(),
             "file_export_pptx" => "Export as PowerPoint (.pptx)...".to_string(),
-            "app_about" => "About MarkBear".to_string(),
+            "app_about" => "About Pourdown".to_string(),
             "app_services" => "Services".to_string(),
-            "app_hide" => "Hide MarkBear".to_string(),
+            "app_hide" => "Hide Pourdown".to_string(),
             "app_hide_others" => "Hide Others".to_string(),
             "app_show_all" => "Show All".to_string(),
-            "app_quit" => "Quit MarkBear".to_string(),
+            "app_quit" => "Quit Pourdown".to_string(),
             "window_minimize" => "Minimize".to_string(),
             "window_zoom" => "Zoom".to_string(),
             "window_fullscreen" => "Toggle Full Screen".to_string(),
@@ -765,7 +776,7 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
     {
         let app_menu = Submenu::with_items(
             handle,
-            "MarkBear",
+            "Pourdown",
             true,
             &[
                 &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), None)?,

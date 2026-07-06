@@ -1,5 +1,5 @@
 [package]
-name = "MarkBear"
+name = "Pourdown"
 version = "0.1.0"
 description = "A Tauri-based WYSIWYG Markdown editor"
 authors = ["you"]
