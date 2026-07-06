@@ -139,6 +139,7 @@
       .screenshot-section img {
         width: 100%;
         max-width: 860px;
+        height: auto;
         border-radius: 10px;
         border: 1px solid var(--border);
         box-shadow: 0 4px 24px rgba(0,0,0,0.09);
@@ -234,7 +235,7 @@
     <header>
       <div class="container">
         <a class="logo" href="https://passpier.github.io/Pourdown/">
-          <img src="favicon.png" alt="" width="32" height="32" />
+          <img src="logo-64.webp" alt="" width="32" height="32" />
           Pourdown
         </a>
         <nav>
@@ -245,6 +246,7 @@
       </div>
     </header>
 
+    <main>
     <!-- Hero -->
     <section class="hero">
       <div class="container">
@@ -268,11 +270,14 @@
     <section class="screenshot-section">
       <div class="container">
         <img
-          src="https://raw.githubusercontent.com/passpier/Pourdown/main/screenshots/home.png"
+          src="home-860.webp"
+          srcset="home-860.webp 860w, home-1720.webp 1720w"
+          sizes="(max-width: 900px) 100vw, 860px"
           alt="Pourdown editor showing a Markdown document with file sidebar and toolbar"
           width="860"
-          height="540"
+          height="574"
           loading="lazy"
+          decoding="async"
         />
       </div>
     </section>
@@ -374,6 +379,7 @@
         </div>
       </div>
     </section>
+    </main>
 
     <!-- Footer -->
     <footer>
