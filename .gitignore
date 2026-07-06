@@ -56,3 +56,4 @@ pnpm-debug.log*
 dist-ssr/
 .eslintcache
 .stylelintcache
+CLAUDE.local.md
