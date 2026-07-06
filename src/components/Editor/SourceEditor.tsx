@@ -5,7 +5,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import {
-  scanMarkdownHeadings,
+  scanMarkdownBlocks,
   computeSegmentAnchor,
   resolveSegmentScrollTop,
   measureTextareaLineOffsets,
@@ -72,12 +72,15 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
     }
   }, [documentId]);
 
-  // Measure each heading's pixel Y within the textarea's own content flow
-  // (accounting for soft-wrapping), producing landmarks comparable to the
-  // WYSIWYG editor's own measurements of the *same* headings.
-  const measureLandmarks = useCallback((textarea: HTMLTextAreaElement, text: string, headings: ReturnType<typeof scanMarkdownHeadings>): HeadingLandmark[] => {
-    const ys = measureTextareaLineOffsets(textarea, text, headings.map((h) => h.charOffset));
-    return headings.map((h, i) => ({ index: h.index, text: h.text, y: ys[i] }));
+  // Measure each top-level block's pixel Y within the textarea's own content
+  // flow (accounting for soft-wrapping), producing landmarks comparable to
+  // the WYSIWYG editor's own measurements of the *same* blocks. Anchoring on
+  // every block rather than just headings keeps interpolated segments small,
+  // so drift within a segment stays negligible even across a long code
+  // fence between two distant headings.
+  const measureLandmarks = useCallback((textarea: HTMLTextAreaElement, text: string, blocks: ReturnType<typeof scanMarkdownBlocks>): HeadingLandmark[] => {
+    const ys = measureTextareaLineOffsets(textarea, text, blocks.map((b) => b.charOffset));
+    return blocks.map((b, i) => ({ index: b.index, text: b.text, y: ys[i] }));
   }, []);
 
   // Restore the position (fractional viewport-top between two bracketing
@@ -109,39 +112,70 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
     let cancelled = false;
     let anchor: ReturnType<typeof consumePendingAnchor> | 'unconsumed' = 'unconsumed';
 
-    const attemptRestore = (retriesLeft: number) => {
+    // Mirrors the WYSIWYG editor's settle loop: re-measure every frame until
+    // the target scrollTop stops moving (or a hard cap is hit), instead of
+    // trusting a single measurement after a fixed number of retries. The
+    // textarea's width is driven by `layoutMetrics.contentWidth`, which is
+    // computed by `useEditorLayout`'s *passive* effect and can still be 0 (or
+    // mid-transition) for a few frames after mount — measuring line-wrap
+    // against that produces a moving target, which is what made the restored
+    // position drift/land at the top on every toggle.
+    const MAX_SETTLE_FRAMES = 30;
+    const MIN_SETTLE_FRAMES = 2;
+
+    const attemptRestore = (frame: number, resolvedAnchor: NonNullable<ReturnType<typeof consumePendingAnchor>>, lastScrollTop: number | null) => {
       if (cancelled) return;
+      const ta = textareaRef.current;
+      if (!ta) return;
+      if (ta.clientWidth === 0) {
+        if (frame < MAX_SETTLE_FRAMES) {
+          requestAnimationFrame(() => attemptRestore(frame + 1, resolvedAnchor, lastScrollTop));
+        }
+        return;
+      }
+
+      const text = contentRef.current;
+      const blocks = scanMarkdownBlocks(text);
+      const landmarks = measureLandmarks(ta, text, blocks);
+      const contentHeight = ta.scrollHeight;
+      const target = resolveSegmentScrollTop(landmarks, resolvedAnchor, contentHeight);
+
+      const stable = frame >= MIN_SETTLE_FRAMES && lastScrollTop !== null && Math.abs(target - lastScrollTop) < 1;
+      if (stable || frame >= MAX_SETTLE_FRAMES) {
+        // Place the caret at the nearest block at-or-below the restored
+        // viewport-top (not the `lower` bracketing landmark, which by
+        // construction sits at/above the top and would leave the caret
+        // off-screen above the fold).
+        const sortedByY = landmarks
+          .map((lm, i) => ({ lm, block: blocks[i] }))
+          .sort((a, b) => a.lm.y - b.lm.y);
+        let caretBlock = sortedByY.find(({ lm }) => lm.y >= target - 1)?.block;
+        if (!caretBlock) {
+          const lowerLandmark = resolvedAnchor.lower ? findAnchorHeading(landmarks, resolvedAnchor.lower) : undefined;
+          caretBlock = lowerLandmark ? blocks.find((b) => b.index === lowerLandmark.index) : undefined;
+        }
+        // Place the caret before scrolling: focusing the textarea can itself
+        // scroll it into view, which would fight the scrollTop set below.
+        if (caretBlock) {
+          textarea.setSelectionRange(caretBlock.charOffset, caretBlock.charOffset);
+        }
+        textarea.scrollTop = target;
+        textarea.focus({ preventScroll: true });
+        return;
+      }
+
+      ta.scrollTop = target;
+      requestAnimationFrame(() => attemptRestore(frame + 1, resolvedAnchor, target));
+    };
+
+    requestAnimationFrame(() => {
       if (anchor === 'unconsumed') {
         anchor = consumePendingAnchor();
       }
       const resolvedAnchor = anchor;
       if (!resolvedAnchor || resolvedAnchor.documentId !== documentIdRef.current) return;
-
-      const ta = textareaRef.current;
-      if (!ta) return;
-      if (ta.clientWidth === 0 && retriesLeft > 0) {
-        requestAnimationFrame(() => attemptRestore(retriesLeft - 1));
-        return;
-      }
-
-      const text = contentRef.current;
-      const headings = scanMarkdownHeadings(text);
-      const landmarks = measureLandmarks(ta, text, headings);
-      const contentHeight = ta.scrollHeight;
-
-      const lowerLandmark = resolvedAnchor.lower ? findAnchorHeading(landmarks, resolvedAnchor.lower) : undefined;
-      const lowerHeading = lowerLandmark ? headings.find((h) => h.index === lowerLandmark.index) : undefined;
-
-      // Place the caret before scrolling: focusing the textarea can itself
-      // scroll it into view, which would fight the scrollTop set below.
-      if (lowerHeading) {
-        textarea.setSelectionRange(lowerHeading.charOffset, lowerHeading.charOffset);
-      }
-      textarea.scrollTop = resolveSegmentScrollTop(landmarks, resolvedAnchor, contentHeight);
-      textarea.focus({ preventScroll: true });
-    };
-
-    requestAnimationFrame(() => attemptRestore(3));
+      attemptRestore(0, resolvedAnchor, null);
+    });
     return () => {
       cancelled = true;
     };
@@ -175,8 +209,8 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
       if (!textarea) return;
 
       const text = contentRef.current;
-      const headings = scanMarkdownHeadings(text);
-      const landmarks = measureLandmarks(textarea, text, headings);
+      const blocks = scanMarkdownBlocks(text);
+      const landmarks = measureLandmarks(textarea, text, blocks);
       const contentHeight = textarea.scrollHeight;
 
       const anchor = computeSegmentAnchor(landmarks, textarea.scrollTop, contentHeight);

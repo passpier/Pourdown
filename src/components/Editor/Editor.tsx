@@ -17,7 +17,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import { debounce } from '@/lib/utils';
-import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock } from '@/lib/frontmatterUtils';
+import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock, frontmatterLength } from '@/lib/frontmatterUtils';
 import { computeSegmentAnchor, resolveSegmentScrollTop, findAnchorHeading, type HeadingLandmark } from '@/lib/editorAnchor';
 import '@/components/CodeBlockRenderer/CodeBlockRenderer.css';
 import { CodeBlockNodeView } from './CodeBlockNodeView';
@@ -42,6 +42,15 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const layoutMetrics = useEditorLayout(containerRef);
   const [hasMeasuredLayout, setHasMeasuredLayout] = useState(false);
+  // Kept false until the anchor-restore settle loop finishes (or, if there's
+  // nothing to restore, until the mount effect confirms that). Enabling the
+  // `max-width` CSS transition before that would animate the content width
+  // while restore is still re-measuring landmarks against a moving layout —
+  // exactly the timing bug that made the restored scroll position land
+  // somewhere different on every toggle. Once enabled it only ever fires on
+  // genuine width changes (window resize, sidebar toggle), which is the
+  // actual intent of the transition.
+  const [widthTransitionEnabled, setWidthTransitionEnabled] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [replaceTerm, setReplaceTerm] = useState('');
   const [replaceVisible, setReplaceVisible] = useState(false);
@@ -168,25 +177,34 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     }
   }, [documentId]);
 
-  // Measure each heading's pixel Y in container-scroll coordinates, so it's
-  // comparable across captures/restores despite async layout (images, code
-  // highlighting, tables) shifting positions between them.
-  const measureHeadingLandmarks = useCallback((ed: NonNullable<typeof editor>, container: HTMLDivElement): HeadingLandmark[] => {
+  // Measure every *top-level* block's (not just headings') pixel Y in
+  // container-scroll coordinates. Anchoring only between headings leaves
+  // huge, inaccurate segments on code-heavy documents (a long fence between
+  // two headings occupies a very different proportion of raw text vs.
+  // rendered height); anchoring between every top-level block keeps each
+  // interpolated segment small so drift within a segment is negligible.
+  //
+  // When the document has a leading YAML frontmatter block, it's injected as
+  // the first top-level node (see `injectFrontmatterAsCodeBlock`) but has no
+  // counterpart in `scanMarkdownBlocks` (which skips it deliberately, see
+  // that function's docs) — skip it here too so both sides' ordinals agree.
+  const measureBlockLandmarks = useCallback((ed: NonNullable<typeof editor>, container: HTMLDivElement): HeadingLandmark[] => {
     const containerTop = container.getBoundingClientRect().top - container.scrollTop;
+    const skipFirst = document ? frontmatterLength(document.content) > 0 : false;
     const landmarks: HeadingLandmark[] = [];
+    let childIndex = -1;
     let ordinal = -1;
-    ed.state.doc.descendants((node, pos) => {
-      if (node.type.name === 'heading') {
-        ordinal += 1;
-        const dom = ed.view.nodeDOM(pos);
-        const el = dom instanceof HTMLElement ? dom : dom?.parentElement;
-        const y = el ? el.getBoundingClientRect().top - containerTop : 0;
-        landmarks.push({ index: ordinal, text: node.textContent, y });
-      }
-      return true;
+    ed.state.doc.forEach((node, offset) => {
+      childIndex += 1;
+      if (skipFirst && childIndex === 0) return;
+      ordinal += 1;
+      const dom = ed.view.nodeDOM(offset);
+      const el = dom instanceof HTMLElement ? dom : dom?.parentElement;
+      const y = el ? el.getBoundingClientRect().top - containerTop : 0;
+      landmarks.push({ index: ordinal, text: node.textContent.slice(0, 60), y });
     });
     return landmarks;
-  }, []);
+  }, [document]);
 
   // Restore the position (fractional viewport-top between two bracketing
   // headings) left behind when switching from source mode into WYSIWYG mode.
@@ -219,44 +237,82 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   // true by the second (real) mount — permanently skipping the restore.
   // Deferring both means the synthetic pass's rAF is cancelled before doing
   // anything, and the second, real mount performs the one-and-only restore.
+  // How many frames the settle loop is willing to keep re-measuring before
+  // giving up and finalizing wherever it last landed (~500ms at 60fps) — a
+  // safety net against a doc that never stops reflowing (e.g. a very slow
+  // async Mermaid render), not the normal exit path.
+  const MAX_SETTLE_FRAMES = 30;
+  // Require at least this many measurements before a match can be declared
+  // stable, so an accidental same-value hit on frame 1 doesn't end the loop
+  // before layout (width transition, code-block highlighting) has even
+  // started moving.
+  const MIN_SETTLE_FRAMES = 2;
+
   const hasRestoredAnchorRef = useRef(false);
   useEffect(() => {
     if (hasRestoredAnchorRef.current) return;
     if (!editor || !document) return;
 
     let cancelled = false;
-    const settleFrames = 4;
 
-    const apply = (framesLeft: number, anchor: NonNullable<ReturnType<typeof consumePendingAnchor>>) => {
+    const finalizeCaret = (
+      landmarks: HeadingLandmark[],
+      anchor: NonNullable<ReturnType<typeof consumePendingAnchor>>,
+      container: HTMLDivElement
+    ) => {
+      // Place the caret at the actual visible top of the content (not at the
+      // bracketing landmark, which by construction sits at or above the
+      // viewport-top and would land the caret off-screen above the fold).
+      const rect = container.getBoundingClientRect();
+      const coords = { left: rect.left + rect.width / 2, top: rect.top + 4 };
+      const hit = editor.view.posAtCoords(coords);
+      if (hit) {
+        editor.commands.setTextSelection(hit.pos);
+      } else {
+        // Fallback for the rare case posAtCoords misses (e.g. viewport-top
+        // sits over a non-text node): use the lower bracketing landmark.
+        // Ordinals here must skip the injected-frontmatter node exactly like
+        // `measureBlockLandmarks` does, or they'd point at the wrong block.
+        const lowerTarget = anchor.lower ? findAnchorHeading(landmarks, anchor.lower) : undefined;
+        if (lowerTarget) {
+          const skipFirst = document ? frontmatterLength(document.content) > 0 : false;
+          let childIndex = -1;
+          let ordinal = -1;
+          editor.state.doc.forEach((_node, offset) => {
+            childIndex += 1;
+            if (skipFirst && childIndex === 0) return;
+            ordinal += 1;
+            if (ordinal === lowerTarget.index) {
+              editor.commands.setTextSelection(offset + 1);
+            }
+          });
+        }
+      }
+      editor.commands.focus(undefined, { scrollIntoView: false });
+      setWidthTransitionEnabled(true);
+    };
+
+    const apply = (
+      frame: number,
+      anchor: NonNullable<ReturnType<typeof consumePendingAnchor>>,
+      lastScrollTop: number | null
+    ) => {
       if (cancelled) return;
       const container = containerRef.current;
       if (!container) return;
 
-      const landmarks = measureHeadingLandmarks(editor, container);
+      const landmarks = measureBlockLandmarks(editor, container);
       const contentHeight = container.scrollHeight;
-      container.scrollTop = resolveSegmentScrollTop(landmarks, anchor, contentHeight);
+      const target = resolveSegmentScrollTop(landmarks, anchor, contentHeight);
+      container.scrollTop = target;
 
-      // Keep the caret near the restored position for continuity, without
-      // re-triggering a scroll (scrollIntoView would fight the value above).
-      const lowerTarget = anchor.lower ? findAnchorHeading(landmarks, anchor.lower) : undefined;
-      if (lowerTarget) {
-        let ordinal = -1;
-        editor.state.doc.descendants((node, pos) => {
-          if (node.type.name === 'heading') {
-            ordinal += 1;
-            if (ordinal === lowerTarget.index) {
-              editor.commands.setTextSelection(pos + 1);
-              return false;
-            }
-          }
-          return true;
-        });
+      const stable =
+        frame >= MIN_SETTLE_FRAMES && lastScrollTop !== null && Math.abs(target - lastScrollTop) < 1;
+      if (stable || frame >= MAX_SETTLE_FRAMES) {
+        finalizeCaret(landmarks, anchor, container);
+        return;
       }
-      editor.commands.focus(undefined, { scrollIntoView: false });
-
-      if (framesLeft > 0) {
-        requestAnimationFrame(() => apply(framesLeft - 1, anchor));
-      }
+      requestAnimationFrame(() => apply(frame + 1, anchor, target));
     };
 
     requestAnimationFrame(() => {
@@ -264,14 +320,19 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       hasRestoredAnchorRef.current = true;
 
       const anchor = consumePendingAnchor();
-      if (!anchor || anchor.documentId !== documentId) return;
+      if (!anchor || anchor.documentId !== documentId) {
+        // Nothing to restore (first-ever open of this document) — safe to
+        // enable the width transition immediately.
+        setWidthTransitionEnabled(true);
+        return;
+      }
 
-      apply(settleFrames, anchor);
+      apply(0, anchor, null);
     });
     return () => {
       cancelled = true;
     };
-  }, [editor, document, documentId, consumePendingAnchor, measureHeadingLandmarks]);
+  }, [editor, document, documentId, consumePendingAnchor, measureBlockLandmarks]);
 
   // Capture the current position when this editor unmounts (i.e. the user
   // switches to source mode), so it can be restored on the way back.
@@ -279,8 +340,8 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   editorRef.current = editor;
   const documentIdRef = useRef(documentId);
   documentIdRef.current = documentId;
-  const measureHeadingLandmarksRef = useRef(measureHeadingLandmarks);
-  measureHeadingLandmarksRef.current = measureHeadingLandmarks;
+  const measureBlockLandmarksRef = useRef(measureBlockLandmarks);
+  measureBlockLandmarksRef.current = measureBlockLandmarks;
   // useLayoutEffect (not useEffect) is required here: its cleanup runs
   // synchronously during the commit, before React detaches this subtree's
   // DOM. A plain useEffect's cleanup fires asynchronously after the DOM is
@@ -313,7 +374,7 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       const container = containerRef.current;
       if (!ed || !container) return;
 
-      const landmarks = measureHeadingLandmarksRef.current(ed, container);
+      const landmarks = measureBlockLandmarksRef.current(ed, container);
       const contentHeight = container.scrollHeight;
       const anchor = computeSegmentAnchor(landmarks, container.scrollTop, contentHeight);
 
@@ -433,7 +494,10 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
           style={{
             width: '100%',
             maxWidth: hasMeasuredLayout ? `${layoutMetrics.contentWidth}px` : undefined,
-            transition: hasMeasuredLayout ? 'max-width 200ms ease, width 200ms ease' : 'none',
+            transition:
+              hasMeasuredLayout && widthTransitionEnabled
+                ? 'max-width 200ms ease, width 200ms ease'
+                : 'none',
             willChange: hasMeasuredLayout ? 'max-width, width' : 'auto',
           }}
         />

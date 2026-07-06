@@ -148,6 +148,114 @@ export function scanMarkdownHeadings(content: string): HeadingInfo[] {
   return headings;
 }
 
+/** Markdown-it token types that open (or, for self-contained ones, *are*) a
+ * top-level block we can use as a landmark. Anything not in this list (list
+ * items, table rows/cells, blockquote-internal paragraphs, etc.) is nested
+ * inside one of these and doesn't need its own landmark. */
+const BLOCK_TOKEN_TYPES = new Set([
+  'heading_open',
+  'paragraph_open',
+  'blockquote_open',
+  'bullet_list_open',
+  'ordered_list_open',
+  'table_open',
+  'fence',
+  'code_block',
+  'hr',
+  'html_block',
+]);
+
+/** Find the token closing the container opened at `openIndex`. Markdown-it
+ * assigns every token a `.level` (nesting depth); everything inside a
+ * container is strictly deeper than the container itself, so the next token
+ * back at the same level is guaranteed to be its matching close. */
+function findMatchingClose(tokens: MarkdownItToken[], openIndex: number): number {
+  const level = (tokens[openIndex] as unknown as { level: number }).level;
+  for (let i = openIndex + 1; i < tokens.length; i++) {
+    if ((tokens[i] as unknown as { level: number }).level === level) return i;
+  }
+  return tokens.length - 1;
+}
+
+/** Flatten the plain text of every `inline` token between two token indices
+ * (exclusive of both), the same way `inlineTokenText` flattens a single
+ * heading/paragraph. Used to build a text signature for container blocks
+ * (blockquote, list, table) whose own token carries no text directly. */
+function collectInlineText(tokens: MarkdownItToken[], startIndex: number, endIndex: number): string {
+  const parts: string[] = [];
+  for (let i = startIndex; i < endIndex; i++) {
+    const token = tokens[i];
+    if (token.type === 'inline') parts.push(inlineTokenText(token));
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Scan raw markdown for every **top-level block** (heading, paragraph,
+ * blockquote, list, table, fenced/indented code, thematic break, raw HTML
+ * block) rather than just headings. Headings are often too sparse to anchor
+ * accurately — a single code-heavy section between two headings can span
+ * most of the viewport, and a plain fraction-of-that-segment doesn't track
+ * pixel position well when the raw-text and rendered proportions differ a
+ * lot (long code fences are a common case). Anchoring between every
+ * top-level block instead keeps each interpolated segment small, so drift
+ * inside a segment is negligible regardless of content type.
+ *
+ * Shares `headingScanMd` with `scanMarkdownHeadings` so the two functions
+ * always agree on where blocks start; `scanMarkdownHeadings` remains for
+ * anywhere only headings are relevant.
+ */
+export function scanMarkdownBlocks(content: string): HeadingInfo[] {
+  const skip = frontmatterLength(content);
+  const skippedLines = skip > 0 ? content.slice(0, skip).split('\n').length - 1 : 0;
+  const body = content.slice(skip);
+
+  const lineStartOffsets: number[] = [0];
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\n') lineStartOffsets.push(i + 1);
+  }
+
+  const tokens = headingScanMd.parse(body, {}) as unknown as MarkdownItToken[];
+  const blocks: HeadingInfo[] = [];
+  let blockIndex = 0;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!BLOCK_TOKEN_TYPES.has(token.type) || !token.map) continue;
+    // Only top-level blocks are independent landmarks; a paragraph nested
+    // inside a list item or blockquote is still covered by that container's
+    // own landmark, and giving it a separate one would double-count the
+    // segment (markdown-it's `.level` is 0 only for genuinely top-level
+    // tokens).
+    if ((token as unknown as { level: number }).level !== 0) continue;
+
+    const startLine = token.map[0];
+    let text: string;
+    if (token.type === 'heading_open' || token.type === 'paragraph_open') {
+      const inlineToken = tokens[i + 1];
+      text = inlineToken && inlineToken.type === 'inline' ? inlineTokenText(inlineToken) : '';
+    } else if (token.type === 'fence' || token.type === 'code_block') {
+      text = token.content;
+    } else if (token.type === 'hr' || token.type === 'html_block') {
+      text = '';
+    } else {
+      // Container block (blockquote/list/table): flatten its own text.
+      const closeIndex = findMatchingClose(tokens, i);
+      text = collectInlineText(tokens, i + 1, closeIndex);
+    }
+
+    blocks.push({
+      index: blockIndex++,
+      charOffset: skip + (lineStartOffsets[startLine] ?? 0),
+      line: skippedLines + startLine,
+      text: text.trim().slice(0, 60),
+      level: token.type === 'heading_open' ? Number(token.tag.slice(1)) : 0,
+    });
+  }
+
+  return blocks;
+}
+
 /**
  * Find the heading a restored position should target. Matches primarily by
  * heading TEXT (picking whichever match is closest to the captured index, in
