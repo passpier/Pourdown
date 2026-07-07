@@ -8,6 +8,9 @@ import { WindowTitlebar } from 'tauri-controls';
 import { Editor } from '@/components/Editor/Editor';
 import { SourceEditor } from '@/components/Editor/SourceEditor';
 import { Sidebar } from '@/components/Sidebar/Sidebar';
+import { TabBar } from '@/components/Tabs/TabBar';
+import { UnsavedCloseDialog } from '@/components/Tabs/UnsavedCloseDialog';
+import { documentDisplayName } from '@/lib/documentTitle';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -27,7 +30,8 @@ function App() {
   const closeDocument = useDocumentStore((state) => state.closeDocument);
   const createNewDocument = useDocumentStore((state) => state.createNewDocument);
   const loadDocument = useDocumentStore((state) => state.loadDocument);
-  
+  const setActiveDocument = useDocumentStore((state) => state.setActiveDocument);
+
   const initializeTheme = useUIStore((state) => state.initializeTheme);
   const sidebarVisible = useUIStore((state) => state.sidebarVisible);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
@@ -47,6 +51,7 @@ function App() {
     state: 'loading' | 'success' | 'error';
     message?: string;
   } | null>(null);
+  const [pendingClose, setPendingClose] = useState<{ id: string } | null>(null);
 
   // Initialize platform detection early (before first render ideally)
   usePlatformInitialization();
@@ -54,11 +59,26 @@ function App() {
   // Initialize auto-save
   useAutoSave();
 
-  // Global keyboard shortcuts for find
+  // Global keyboard shortcuts for find and tab switching
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMac = osPlatform === 'macos';
       const modifier = isMac ? e.metaKey : e.ctrlKey;
+
+      // Ctrl+Tab / Ctrl+Shift+Tab cycles tabs regardless of platform (this is
+      // always Ctrl, never Cmd, matching browser/editor convention).
+      if (e.ctrlKey && e.key === 'Tab') {
+        const { documents: docs, activeDocumentId: activeId } = useDocumentStore.getState();
+        if (docs.length > 1) {
+          e.preventDefault();
+          const currentIndex = docs.findIndex((d) => d.id === activeId);
+          const delta = e.shiftKey ? -1 : 1;
+          const nextIndex = (currentIndex + delta + docs.length) % docs.length;
+          setActiveDocument(docs[nextIndex].id);
+        }
+        return;
+      }
+
       if (!modifier) return;
 
       if (e.key === 'f' && !e.shiftKey) {
@@ -68,11 +88,18 @@ function App() {
         e.preventDefault();
         setSidebarVisible(true);
         requestSidebarSearchFocus();
+      } else if (/^[1-9]$/.test(e.key)) {
+        const { documents: docs } = useDocumentStore.getState();
+        if (docs.length === 0) return;
+        e.preventDefault();
+        const index = e.key === '9' ? docs.length - 1 : Number(e.key) - 1;
+        const target = docs[index];
+        if (target) setActiveDocument(target.id);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [osPlatform, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus]);
+  }, [osPlatform, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, setActiveDocument]);
 
   const activeDocument = documents.find(d => d.id === activeDocumentId);
 
@@ -322,15 +349,20 @@ function App() {
     }
   };
 
-  const handleSaveAs = useCallback(async () => {
-    const { activeDocumentId: docId } = useDocumentStore.getState();
-    if (!docId) return;
-
-    // Flush editor content to store, bypassing the 500 ms debounce
-    const editorInstance = useEditorStore.getState().editor;
-    if (editorInstance) {
-      const currentContent = (editorInstance.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
-      useDocumentStore.getState().updateContent(docId, currentContent);
+  // Shared "Save As" flow, parameterized by document id so it can be driven
+  // both by the active-document menu action (handleSaveAs below) and by the
+  // unsaved-changes close dialog, which may target a non-active tab.
+  // Returns whether the document was actually saved (false if the user
+  // cancelled the native save dialog).
+  const saveDocumentAs = useCallback(async (docId: string): Promise<boolean> => {
+    // Flush editor content to store, bypassing the 500 ms debounce. Only the
+    // active document has a live editor instance to flush from.
+    if (docId === useDocumentStore.getState().activeDocumentId) {
+      const editorInstance = useEditorStore.getState().editor;
+      if (editorInstance) {
+        const currentContent = (editorInstance.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
+        useDocumentStore.getState().updateContent(docId, currentContent);
+      }
     }
 
     try {
@@ -342,19 +374,27 @@ function App() {
         }]
       });
 
-      if (filePath) {
-        // Only update path; content is already correct in the store
-        useDocumentStore.setState((state) => ({
-          documents: state.documents.map(d =>
-            d.id === docId ? { ...d, path: filePath } : d
-          )
-        }));
-        await useDocumentStore.getState().saveDocument(docId);
-      }
+      if (!filePath) return false;
+
+      // Only update path; content is already correct in the store
+      useDocumentStore.setState((state) => ({
+        documents: state.documents.map(d =>
+          d.id === docId ? { ...d, path: filePath } : d
+        )
+      }));
+      await useDocumentStore.getState().saveDocument(docId);
+      return true;
     } catch (error) {
       console.error('Save as failed:', error);
+      return false;
     }
   }, []);
+
+  const handleSaveAs = useCallback(async () => {
+    const { activeDocumentId: docId } = useDocumentStore.getState();
+    if (!docId) return;
+    await saveDocumentAs(docId);
+  }, [saveDocumentAs]);
 
   const handleManualSave = useCallback(async () => {
     const { activeDocumentId: docId, documents } = useDocumentStore.getState();
@@ -379,6 +419,65 @@ function App() {
       await handleSaveAs();
     }
   }, [handleSaveAs]);
+
+  // Single choke point for closing any document (tab ×, native menu, future
+  // shortcuts). Flushes the live editor's content first (if this is the
+  // active document) so the dirty check below is accurate, then either closes
+  // immediately or opens the unsaved-changes confirm dialog.
+  const requestCloseDocument = useCallback((id: string) => {
+    if (id === useDocumentStore.getState().activeDocumentId) {
+      const editorInstance = useEditorStore.getState().editor;
+      if (editorInstance) {
+        const currentContent = (editorInstance.storage['markdown'] as { getMarkdown: () => string }).getMarkdown();
+        useDocumentStore.getState().updateContent(id, currentContent);
+      }
+    }
+
+    const doc = useDocumentStore.getState().documents.find((d) => d.id === id);
+    if (!doc || !doc.isDirty) {
+      closeDocument(id);
+      return;
+    }
+    setPendingClose({ id });
+  }, [closeDocument]);
+
+  const pendingCloseDoc = pendingClose
+    ? documents.find((d) => d.id === pendingClose.id) ?? null
+    : null;
+
+  const handleConfirmSave = useCallback(async () => {
+    if (!pendingClose) return;
+    const { id } = pendingClose;
+    const doc = useDocumentStore.getState().documents.find((d) => d.id === id);
+    if (!doc) {
+      setPendingClose(null);
+      return;
+    }
+
+    try {
+      if (doc.path) {
+        await useDocumentStore.getState().saveDocument(id);
+        closeDocument(id);
+      } else {
+        const saved = await saveDocumentAs(id);
+        if (saved) closeDocument(id);
+      }
+    } catch (error) {
+      console.error('Failed to save before closing:', error);
+    } finally {
+      setPendingClose(null);
+    }
+  }, [pendingClose, closeDocument, saveDocumentAs]);
+
+  const handleConfirmDontSave = useCallback(() => {
+    if (!pendingClose) return;
+    closeDocument(pendingClose.id);
+    setPendingClose(null);
+  }, [pendingClose, closeDocument]);
+
+  const handleCancelClose = useCallback(() => {
+    setPendingClose(null);
+  }, []);
 
   const runEditorCommand = (payload: { command: string; level?: number }) => {
     if (!editor) return;
@@ -452,7 +551,7 @@ function App() {
           }),
           listen('menu-close-document', () => {
             if (activeDocumentId) {
-              closeDocument(activeDocumentId);
+              requestCloseDocument(activeDocumentId);
             }
           }),
           listen('menu-toggle-sidebar', () => {
@@ -507,7 +606,7 @@ function App() {
       menuUnlistenersRef.current.forEach(unlisten => unlisten());
       menuUnlistenersRef.current = [];
     };
-  }, [editor, activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, closeDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport]);
+  }, [editor, activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, requestCloseDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport]);
 
   // Enable/disable export menu items based on whether a document is active
   useEffect(() => {
@@ -586,13 +685,19 @@ function App() {
 
         {/* Editor Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar requestCloseDocument={requestCloseDocument} />
           {activeDocumentId ? (
             <>
               <div className="flex-1 overflow-hidden">
+                {/* Keyed by documentId so each open document gets its own Tiptap
+                    instance on switch. Without this key, a single shared editor
+                    instance is reused across documents, which bleeds undo/redo
+                    history between tabs and lets a stale `onUpdate` closure
+                    write content to the wrong document after a fast switch. */}
                 {editorMode === 'wysiwyg' ? (
-                  <Editor documentId={activeDocumentId} />
+                  <Editor key={activeDocumentId} documentId={activeDocumentId} />
                 ) : (
-                  <SourceEditor documentId={activeDocumentId} />
+                  <SourceEditor key={activeDocumentId} documentId={activeDocumentId} />
                 )}
               </div>
             </>
@@ -638,6 +743,13 @@ function App() {
           )}
         </div>
       )}
+      <UnsavedCloseDialog
+        open={pendingClose !== null}
+        fileName={pendingCloseDoc ? documentDisplayName(pendingCloseDoc, t('common.untitled')) : ''}
+        onSave={() => void handleConfirmSave()}
+        onDontSave={handleConfirmDontSave}
+        onCancel={handleCancelClose}
+      />
     </div>
   );
 }

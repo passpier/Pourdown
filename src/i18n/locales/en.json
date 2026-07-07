@@ -106,5 +106,16 @@
     "import_success": "Import complete. Document opened as untitled.",
     "export_success": "Export complete.",
     "error_generic": "Conversion failed. Check the file and try again."
+  },
+  "tabs": {
+    "new_tab": "New Document",
+    "close_tab": "Close"
+  },
+  "dialog": {
+    "unsaved_title": "Unsaved Changes",
+    "unsaved_message": "Do you want to save the changes you made to {{name}}?",
+    "save": "Save",
+    "dont_save": "Don't Save",
+    "cancel": "Cancel"
   }
 }

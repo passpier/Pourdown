@@ -106,5 +106,16 @@
     "import_success": "匯入完成。文件已作為未命名文件開啟。",
     "export_success": "匯出完成。",
     "error_generic": "轉換失敗。請檢查檔案後再試。"
+  },
+  "tabs": {
+    "new_tab": "新增文件",
+    "close_tab": "關閉"
+  },
+  "dialog": {
+    "unsaved_title": "尚未儲存的變更",
+    "unsaved_message": "是否要儲存對「{{name}}」所做的變更？",
+    "save": "儲存",
+    "dont_save": "不要儲存",
+    "cancel": "取消"
   }
 }

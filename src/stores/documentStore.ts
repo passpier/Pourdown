@@ -20,6 +20,7 @@ interface DocumentState {
   saveDocument: (id: string) => Promise<void>;
   loadDocument: (path: string) => Promise<void>;
   createNewDocument: () => void;
+  reorderDocuments: (fromIndex: number, toIndex: number) => void;
 }
 
 export const useDocumentStore = create<DocumentState>((set, get) => ({
@@ -136,4 +137,21 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       activeDocumentId: doc.id,
     }));
   },
+
+  reorderDocuments: (fromIndex, toIndex) =>
+    set((state) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= state.documents.length ||
+        toIndex >= state.documents.length
+      ) {
+        return state;
+      }
+      const documents = [...state.documents];
+      const [moved] = documents.splice(fromIndex, 1);
+      documents.splice(toIndex, 0, moved);
+      return { documents };
+    }),
 }));
