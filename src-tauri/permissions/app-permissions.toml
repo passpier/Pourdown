@@ -64,6 +64,16 @@ description = "Allows the export_document command."
 commands.allow = ["export_document"]
 
 [[permission]]
+identifier = "allow-relocate-media"
+description = "Allows the relocate_media command."
+commands.allow = ["relocate_media"]
+
+[[permission]]
+identifier = "allow-discard-media"
+description = "Allows the discard_media command."
+commands.allow = ["discard_media"]
+
+[[permission]]
 identifier = "allow-take-pending-open-files"
 description = "Allows the take_pending_open_files command."
 commands.allow = ["take_pending_open_files"]

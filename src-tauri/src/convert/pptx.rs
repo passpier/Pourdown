@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use super::media::MediaSink;
 use super::ConversionError;
 
 /// Convert a PPTX file to Markdown.
-/// Each slide becomes a section separated by `---`.
-pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
+/// Each slide becomes a section separated by `---`. Embedded images are
+/// extracted via `media` and rendered as real `![]()` links (falling back to
+/// a text note for non-renderable formats like EMF/WMF).
+pub fn pptx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, ConversionError> {
     use std::io::Read;
 
     let file = std::fs::File::open(path)
@@ -12,9 +15,10 @@ pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| ConversionError(format!("Failed to read PPTX archive: {}", e)))?;
 
-    // Collect rels and slide XML in a single pass
+    // Collect rels, slide XML, and media bytes in a single pass
     let mut rels_map: HashMap<usize, String> = HashMap::new();
     let mut slides_raw: Vec<(usize, String)> = Vec::new();
+    let mut media_bytes: HashMap<String, Vec<u8>> = HashMap::new();
 
     for i in 0..archive.len() {
         let mut entry = archive
@@ -48,6 +52,12 @@ pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
                     .map_err(|e| ConversionError(format!("Failed to read slide XML: {}", e)))?;
                 slides_raw.push((num, content));
             }
+        } else if name.starts_with("ppt/media/") {
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| ConversionError(format!("Failed to read media entry: {}", e)))?;
+            media_bytes.insert(name, buf);
         }
     }
 
@@ -59,7 +69,7 @@ pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
             .get(num)
             .map(|r| parse_slide_rels(r))
             .unwrap_or_default();
-        let text = extract_slide_content(xml, &rels);
+        let text = extract_slide_content(xml, &rels, &media_bytes, media);
         if !text.is_empty() {
             parts.push(text);
         }
@@ -68,8 +78,9 @@ pub fn pptx_to_markdown(path: &str) -> Result<String, ConversionError> {
     Ok(parts.join("\n\n---\n\n"))
 }
 
-/// Parse a slide rels XML and return a map of rId → image filename.
-/// Only image relationships are included.
+/// Parse a slide rels XML and return a map of rId → resolved `ppt/media/...`
+/// path. `Target` is relative to `ppt/slides/` (e.g. `../media/image1.png`),
+/// so it's resolved against that base to get the archive entry name.
 fn parse_slide_rels(rels_xml: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for chunk in rels_xml.split("<Relationship ") {
@@ -77,11 +88,26 @@ fn parse_slide_rels(rels_xml: &str) -> HashMap<String, String> {
             continue;
         }
         if let (Some(id), Some(target)) = (get_xml_attr(chunk, "Id"), get_xml_attr(chunk, "Target")) {
-            let filename = target.rsplit('/').next().unwrap_or(&target).to_string();
-            map.insert(id, filename);
+            map.insert(id, resolve_slide_relative_path(&target));
         }
     }
     map
+}
+
+/// Resolve a path relative to `ppt/slides/` (e.g. `../media/image1.png`)
+/// into an absolute-in-archive path (e.g. `ppt/media/image1.png`).
+fn resolve_slide_relative_path(target: &str) -> String {
+    let mut base: Vec<&str> = vec!["ppt", "slides"];
+    for segment in target.split('/') {
+        match segment {
+            "." | "" => {}
+            ".." => {
+                base.pop();
+            }
+            other => base.push(other),
+        }
+    }
+    base.join("/")
 }
 
 /// Extract the value of a named XML attribute from a fragment.
@@ -96,8 +122,13 @@ fn get_xml_attr(s: &str, attr: &str) -> Option<String> {
     None
 }
 
-/// Extract slide content: title (as `# heading`), image placeholders, and body paragraphs.
-fn extract_slide_content(xml: &str, rels: &HashMap<String, String>) -> String {
+/// Extract slide content: title (as `# heading`), images, and body paragraphs.
+fn extract_slide_content(
+    xml: &str,
+    rels: &HashMap<String, String>,
+    media_bytes: &HashMap<String, Vec<u8>>,
+    media: &mut MediaSink,
+) -> String {
     // Strip the slide background block so its image embeds aren't treated as content images
     let stripped: String;
     let xml: &str = if let Some(bg_start) = xml.find("<p:bg>").or_else(|| xml.find("<p:bg ")) {
@@ -115,15 +146,30 @@ fn extract_slide_content(xml: &str, rels: &HashMap<String, String>) -> String {
         xml
     };
 
-    // Collect content-image placeholders from r:embed references (deduplicated)
+    // Collect content images from r:embed references (deduplicated), extracting
+    // bytes via `media` into real `![]()` links; non-renderable formats
+    // (e.g. EMF/WMF) fall back to a text note instead of a broken image.
     let mut image_placeholders: Vec<String> = Vec::new();
     let mut search_from = 0;
     while let Some(pos) = xml[search_from..].find("r:embed=\"") {
         let abs = search_from + pos + 9;
         if let Some(end) = xml[abs..].find('"') {
             let rid = &xml[abs..abs + end];
-            if let Some(fname) = rels.get(rid) {
-                let placeholder = format!("[Image: {}]", fname);
+            if let Some(media_path) = rels.get(rid) {
+                let placeholder = if let Some(bytes) = media_bytes.get(media_path) {
+                    match media.add(media_path, bytes) {
+                        Some(rel_path) => format!("![]({})", rel_path),
+                        None => format!(
+                            "*(unsupported image: {})*",
+                            media_path.rsplit('/').next().unwrap_or(media_path)
+                        ),
+                    }
+                } else {
+                    format!(
+                        "*(unsupported image: {})*",
+                        media_path.rsplit('/').next().unwrap_or(media_path)
+                    )
+                };
                 if !image_placeholders.contains(&placeholder) {
                     image_placeholders.push(placeholder);
                 }

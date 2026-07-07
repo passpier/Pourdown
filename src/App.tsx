@@ -251,14 +251,18 @@ function App() {
 
       setImportExportStatus({ type: 'import', format, state: 'loading' });
 
-      const markdown = await invoke<string>('import_document', { path: filePath, format });
+      const result = await invoke<{ markdown: string; media_dir: string }>(
+        'import_document',
+        { path: filePath, format }
+      );
 
       const importedDoc = {
         id: crypto.randomUUID(),
         path: null,
-        content: markdown,
+        content: result.markdown,
         isDirty: true,
         lastSaved: null,
+        assetDir: result.media_dir || null,
       };
       useDocumentStore.setState((state) => ({
         documents: [...state.documents, importedDoc],

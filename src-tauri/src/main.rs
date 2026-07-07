@@ -32,6 +32,59 @@ impl AppState {
     }
 }
 
+/**
+ * Returns the app's config directory, creating it (and migrating the legacy
+ * "MarkBear" directory into it) on first use. Platform-specific:
+ * - macOS: ~/Library/Application Support/Pourdown
+ * - Windows: C:\Users\{User}\AppData\Local\Pourdown
+ * - Linux: ~/.config/Pourdown
+ */
+fn app_config_dir() -> Result<PathBuf, String> {
+    let config_dir = if cfg!(target_os = "macos") {
+        // macOS: ~/Library/Application Support
+        let home =
+            std::env::var("HOME").map_err(|_| "Failed to get HOME directory".to_string())?;
+        PathBuf::from(home).join("Library/Application Support")
+    } else if cfg!(target_os = "windows") {
+        // Windows: %LOCALAPPDATA%
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .map_err(|_| "Failed to get LOCALAPPDATA directory".to_string())?;
+        PathBuf::from(local_app_data)
+    } else {
+        // Linux: ~/.config
+        let home =
+            std::env::var("HOME").map_err(|_| "Failed to get HOME directory".to_string())?;
+        PathBuf::from(home).join(".config")
+    };
+
+    let app_config_dir = config_dir.join("Pourdown");
+
+    // One-time migration: if this is the first launch under the new name
+    // and a config directory from the old "MarkBear" name still exists,
+    // move it over so existing users keep their settings. Best-effort —
+    // if it fails for any reason, just fall through and create fresh.
+    if !app_config_dir.exists() {
+        let legacy_config_dir = config_dir.join("MarkBear");
+        if legacy_config_dir.exists() {
+            let _ = fs::rename(&legacy_config_dir, &app_config_dir);
+        }
+    }
+
+    // Create directory if it doesn't exist
+    fs::create_dir_all(&app_config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+
+    Ok(app_config_dir)
+}
+
+/// Directory holding per-import staging media (`imports/{id}/assets/...`).
+/// Created lazily; not tied to document save location.
+fn imports_root_dir() -> Result<PathBuf, String> {
+    let dir = app_config_dir()?.join("imports");
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create imports directory: {}", e))?;
+    Ok(dir)
+}
+
 // User settings - stored persistently in config directory
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct UserSettings {
@@ -47,41 +100,7 @@ impl UserSettings {
      * - Linux: ~/.config/Pourdown
      */
     fn config_path() -> Result<PathBuf, String> {
-        let config_dir = if cfg!(target_os = "macos") {
-            // macOS: ~/Library/Application Support
-            let home = std::env::var("HOME")
-                .map_err(|_| "Failed to get HOME directory".to_string())?;
-            PathBuf::from(home).join("Library/Application Support")
-        } else if cfg!(target_os = "windows") {
-            // Windows: %LOCALAPPDATA%
-            let local_app_data = std::env::var("LOCALAPPDATA")
-                .map_err(|_| "Failed to get LOCALAPPDATA directory".to_string())?;
-            PathBuf::from(local_app_data)
-        } else {
-            // Linux: ~/.config
-            let home = std::env::var("HOME")
-                .map_err(|_| "Failed to get HOME directory".to_string())?;
-            PathBuf::from(home).join(".config")
-        };
-
-        let app_config_dir = config_dir.join("Pourdown");
-
-        // One-time migration: if this is the first launch under the new name
-        // and a config directory from the old "MarkBear" name still exists,
-        // move it over so existing users keep their settings. Best-effort —
-        // if it fails for any reason, just fall through and create fresh.
-        if !app_config_dir.exists() {
-            let legacy_config_dir = config_dir.join("MarkBear");
-            if legacy_config_dir.exists() {
-                let _ = fs::rename(&legacy_config_dir, &app_config_dir);
-            }
-        }
-
-        // Create directory if it doesn't exist
-        fs::create_dir_all(&app_config_dir)
-            .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
-        Ok(app_config_dir.join("settings.json"))
+        Ok(app_config_dir()?.join("settings.json"))
     }
 
     /**
@@ -626,18 +645,128 @@ fn enable_menu_item(app: AppHandle, id: String, enabled: bool) -> Result<(), Str
     Ok(())
 }
 
+// Result of importing a document: the converted Markdown plus the directory
+// (if any) holding sidecar images extracted during conversion. `media_dir` is
+// empty when the import produced no images (nothing to clean up or relocate).
+#[derive(Serialize)]
+struct ImportResult {
+    markdown: String,
+    media_dir: String,
+}
+
+/// Create a fresh, empty staging directory under `imports/` for one import's
+/// extracted media. Uses a timestamp+counter for uniqueness rather than a
+/// `uuid` dependency, since the id only needs to be locally unique.
+fn new_import_dir() -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let root = imports_root_dir()?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = root.join(format!("{}-{}", ts, n));
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create import directory: {}", e))?;
+    Ok(dir)
+}
+
 // Import a document from a non-markdown format and return Markdown content
+// plus the directory (if any) holding extracted sidecar images.
 #[tauri::command]
-async fn import_document(path: String, format: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || match format.as_str() {
-        "docx" => convert::docx::docx_to_markdown(&path).map_err(String::from),
-        "xlsx" => convert::xlsx::xlsx_to_markdown(&path).map_err(String::from),
-        "pdf"  => convert::pdf::pdf_to_markdown(&path).map_err(String::from),
-        "pptx" => convert::pptx::pptx_to_markdown(&path).map_err(String::from),
-        other  => Err(format!("Unsupported import format: {}", other)),
+async fn import_document(path: String, format: String) -> Result<ImportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let import_dir = new_import_dir()?;
+        let assets_dir = import_dir.join("assets");
+        // Downscaling is off by default (preserve originals verbatim). Wire a
+        // `max_image_dimension` user setting through here (e.g. default
+        // Some(2048)) once a Settings UI toggle for it exists.
+        let mut media = convert::media::MediaSink::new(assets_dir).with_max_dimension(None);
+
+        let markdown = match format.as_str() {
+            "docx" => convert::docx::docx_to_markdown(&path, &mut media).map_err(String::from),
+            "xlsx" => convert::xlsx::xlsx_to_markdown(&path, &mut media).map_err(String::from),
+            "pdf" => convert::pdf::pdf_to_markdown(&path, &mut media).map_err(String::from),
+            "pptx" => convert::pptx::pptx_to_markdown(&path, &mut media).map_err(String::from),
+            other => Err(format!("Unsupported import format: {}", other)),
+        }?;
+
+        // Text-only import: don't leave an empty staging directory behind.
+        if media.is_empty() {
+            let _ = fs::remove_dir_all(&import_dir);
+            return Ok(ImportResult {
+                markdown,
+                media_dir: String::new(),
+            });
+        }
+
+        Ok(ImportResult {
+            markdown,
+            media_dir: import_dir.to_string_lossy().to_string(),
+        })
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Relocate an import's staging media directory to sit next to a saved
+/// document (e.g. `<doc-basename>.assets/`). Tries an atomic rename first
+/// (fast, common case) and falls back to a recursive copy + cleanup for
+/// cross-device moves.
+#[tauri::command]
+async fn relocate_media(from: String, to: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let from = PathBuf::from(from);
+        let to = PathBuf::from(to);
+        if !from.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if fs::rename(&from, &to).is_ok() {
+            return Ok(());
+        }
+        copy_dir_recursive(&from, &to).map_err(|e| e.to_string())?;
+        let _ = fs::remove_dir_all(&from);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Discard an import's staging media directory (called when a document that
+/// was never saved is closed). Scoped to `imports/` so it can't be pointed at
+/// arbitrary paths.
+#[tauri::command]
+async fn discard_media(import_dir: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = PathBuf::from(&import_dir);
+        if let Ok(root) = imports_root_dir() {
+            if dir.starts_with(&root) {
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
 }
 
 // Export Markdown content to a non-markdown format
@@ -1043,6 +1172,18 @@ fn main() {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
             let paths = collect_open_paths(args);
             queue_open_files(&app.handle(), paths);
+
+            // Prune stale import-media staging dirs from any previous run.
+            // Documents aren't restored across restarts, so anything left
+            // under `imports/` at startup is necessarily orphaned.
+            if let Ok(root) = imports_root_dir() {
+                if let Ok(entries) = fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let _ = fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+
             Ok(())
         })
         .menu(move |handle| {
@@ -1204,6 +1345,8 @@ fn main() {
             enable_menu_item,
             import_document,
             export_document,
+            relocate_media,
+            discard_media,
             take_pending_open_files,
             get_os_platform,
             get_system_locale,

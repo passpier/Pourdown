@@ -2,7 +2,9 @@ use calamine::{open_workbook_auto, Data, Reader};
 use chrono::{Days, NaiveDate};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use rust_xlsxwriter::Workbook;
+use std::io::Read;
 
+use super::media::MediaSink;
 use super::ConversionError;
 
 const MAX_ROWS_PER_SHEET: usize = 500;
@@ -85,7 +87,7 @@ fn cell_to_string_ctx(cell: &Data, date_col: bool) -> String {
 /// Convert an Excel file (xlsx/xls/ods/csv) to Markdown.
 /// Each sheet becomes a ## heading followed by a GFM table.
 /// Rows are capped at MAX_ROWS_PER_SHEET with an inline note if truncated.
-pub fn xlsx_to_markdown(path: &str) -> Result<String, ConversionError> {
+pub fn xlsx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, ConversionError> {
     let mut workbook = open_workbook_auto(path)
         .map_err(|e| ConversionError(format!("Failed to open spreadsheet: {}", e)))?;
 
@@ -192,7 +194,72 @@ pub fn xlsx_to_markdown(path: &str) -> Result<String, ConversionError> {
         }
     }
 
+    // calamine doesn't read embedded pictures (xlsx only; xls/ods/csv have no
+    // `xl/media/`, so this is a no-op there). Extraction is best-effort:
+    // images are pulled from the archive but can't be reliably mapped back to
+    // a specific sheet/cell from `xl/media/*` alone, so they're appended in a
+    // dedicated section rather than placed inline.
+    let images = extract_xlsx_media(path, media);
+    if !images.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str("## Embedded Images\n\n");
+        output.push_str(
+            "*(Images could not be mapped to a specific sheet/cell; shown here for reference.)*\n\n",
+        );
+        for img in images {
+            output.push_str(&img);
+            output.push('\n');
+        }
+    }
+
     Ok(output)
+}
+
+/// Best-effort extraction of `xl/media/*` pictures from an xlsx archive.
+/// Returns a list of Markdown image links (or "(unsupported image)" notes for
+/// non-renderable formats). Silently returns empty for non-ZIP formats
+/// (xls/ods/csv) or files with no embedded media.
+fn extract_xlsx_media(path: &str, media: &mut MediaSink) -> Vec<String> {
+    let mut links = Vec::new();
+
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return links,
+    };
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(_) => return links,
+    };
+
+    let mut media_names: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            if entry.name().starts_with("xl/media/") {
+                media_names.push(entry.name().to_string());
+            }
+        }
+    }
+    media_names.sort();
+
+    for name in media_names {
+        if let Ok(mut entry) = archive.by_name(&name) {
+            let mut buf = Vec::new();
+            if entry.read_to_end(&mut buf).is_ok() {
+                let link = match media.add(&name, &buf) {
+                    Some(rel_path) => format!("![]({})", rel_path),
+                    None => format!(
+                        "*(unsupported image: {})*",
+                        name.rsplit('/').next().unwrap_or(&name)
+                    ),
+                };
+                links.push(link);
+            }
+        }
+    }
+
+    links
 }
 
 /// Merge "continuation rows" into their preceding row where possible.

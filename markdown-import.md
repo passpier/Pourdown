@@ -68,6 +68,10 @@ function in the same modules to write Markdown back out to docx/xlsx/pdf/pptx.
   to plain text.
 - A table of contents is replaced with an HTML comment placeholder rather than
   being reconstructed.
+- Embedded pictures (`word/media/*`) are extracted and written as sidecar
+  files next to the imported document, referenced with a real `![]()` Markdown
+  image link in place of the original run. Vector formats the webview can't
+  render (EMF/WMF) fall back to an `*(unsupported image)*` note instead.
 
 ### Spreadsheet (`.xlsx` / `.xls` / `.ods`) — `calamine`
 
@@ -79,6 +83,9 @@ function in the same modules to write Markdown back out to docx/xlsx/pdf/pptx.
   physical row — are merged back into the previous row when the two rows'
   non-empty cells don't overlap.
 - Capped at 500 data rows per sheet, with an inline note when rows are omitted.
+- Embedded pictures (`xl/media/*`) are extracted as sidecar files. calamine
+  doesn't expose which cell/sheet a picture belongs to, so they're listed in a
+  best-effort "Embedded Images" section rather than placed inline.
 
 ### PDF — `pdfium-render`
 
@@ -92,6 +99,9 @@ function in the same modules to write Markdown back out to docx/xlsx/pdf/pptx.
 - Large vertical gaps between lines insert a blank line to preserve paragraph
   breaks. An import notice is prepended noting that layout is inferred, not
   exact.
+- Embedded images are extracted from each page's image objects and written as
+  sidecar files, positioned in reading order alongside the surrounding text;
+  exact placement is approximate for complex layouts.
 
 ### PowerPoint (`.pptx`) — manual ZIP + XML parsing
 
@@ -101,13 +111,32 @@ function in the same modules to write Markdown back out to docx/xlsx/pdf/pptx.
   becomes a `#` heading.
 - Body paragraphs preserve bullet/indent level and basic bold/italic
   formatting.
-- Image relationships are resolved from each slide's `.rels` file and rendered
-  as `[Image: filename]` placeholders (the image itself is not embedded).
+- Image relationships are resolved from each slide's `.rels` file; the
+  referenced picture is extracted from `ppt/media/*` and written as a sidecar
+  file, rendered inline as a real `![]()` Markdown image link.
+
+## Image handling
+
+Embedded images across all four formats are written as sidecar files next to
+the imported document (an `assets/` folder while the document is unsaved,
+relocated to `<name>.assets/` alongside the `.md` on first save) and rendered
+live in the Tiptap editor via Tauri's asset protocol. The `.md` file itself
+only ever stores the relative path, so the document and its image folder stay
+portable together.
+
+Vector formats the webview can't display (EMF/WMF, common in Office exports)
+are not converted — they're replaced with an `*(unsupported image)*` note
+rather than a broken image link.
+
+> Optional image captioning via an external vision-capable LLM (MarkItDown-style,
+> opt-in, off by default) is planned as a follow-up but not yet implemented.
 
 ## Known limitations
 
-- xlsx import is capped at 500 rows per sheet.
-- PDF import is text-only (no images or exact layout reconstruction).
-- docx import skips embedded images.
-- pptx import has no images or animations (image references become text
-  placeholders; animations are dropped).
+- xlsx import is capped at 500 rows per sheet; embedded images can't be
+  mapped to a specific sheet/cell and are listed separately.
+- PDF import infers layout, not an exact reconstruction; image placement in
+  complex/multi-column layouts is approximate.
+- docx, pptx, and PDF images in vector formats (EMF/WMF) can't be rendered by
+  the webview and are replaced with a text note.
+- pptx animations are dropped (not representable in Markdown).

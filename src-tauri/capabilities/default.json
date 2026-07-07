@@ -24,6 +24,8 @@
     "allow-enable-menu-item",
     "allow-import-document",
     "allow-export-document",
+    "allow-relocate-media",
+    "allow-discard-media",
     "allow-take-pending-open-files",
     "allow-get-os-platform",
     "allow-get-system-locale",

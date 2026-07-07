@@ -1,24 +1,33 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Cursor, Read};
 
 use docx_rs::{
-    read_docx, DocumentChild, Docx, HyperlinkData, Paragraph, ParagraphChild, Run, RunChild,
-    StructuredDataTag, StructuredDataTagChild, Table, TableCell, TableCellContent, TableChild,
-    TableRow, TableRowChild,
+    read_docx, DocumentChild, Docx, Drawing, DrawingData, HyperlinkData, Paragraph,
+    ParagraphChild, Run, RunChild, StructuredDataTag, StructuredDataTagChild, Table, TableCell,
+    TableCellContent, TableChild, TableRow, TableRowChild,
 };
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+use super::media::MediaSink;
 use super::ConversionError;
+
+/// Resolved image relationships for a DOCX: rId → `word/media/...` archive
+/// path, and the raw bytes of every `word/media/*` part.
+struct DocxMedia {
+    rels: HashMap<String, String>,
+    parts: HashMap<String, Vec<u8>>,
+}
 
 /// Convert a DOCX file to Markdown text.
 ///
 /// Known limitations (by design, not surfaced as errors):
-/// - Images are skipped
 /// - Track changes, comments, footnotes are dropped
 /// - Complex layouts (text boxes, columns) may have scrambled order
 /// - TOC is replaced with an HTML comment placeholder
-pub fn docx_to_markdown(path: &str) -> Result<String, ConversionError> {
+/// - Vector image formats (EMF/WMF) can't render in the webview; a text note
+///   is emitted in their place
+pub fn docx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, ConversionError> {
     let bytes =
         std::fs::read(path).map_err(|e| ConversionError(format!("Failed to read file: {}", e)))?;
 
@@ -28,13 +37,16 @@ pub fn docx_to_markdown(path: &str) -> Result<String, ConversionError> {
     // Build numId -> is_ordered map from the document's numbering definitions.
     let num_map = build_numbering_map(&docx);
 
+    // Resolve embedded image relationships by reopening the raw ZIP.
+    let docx_media = load_docx_media(&bytes);
+
     let mut output = String::new();
     let mut first_block = true;
 
     for child in &docx.document.children {
         match child {
             DocumentChild::Paragraph(para) => {
-                let md = paragraph_to_markdown(para, &num_map);
+                let md = paragraph_to_markdown(para, &num_map, &docx_media, media);
                 if md.trim().is_empty() {
                     if !first_block {
                         output.push('\n');
@@ -52,12 +64,12 @@ pub fn docx_to_markdown(path: &str) -> Result<String, ConversionError> {
                 if !first_block {
                     output.push('\n');
                 }
-                output.push_str(&table_to_markdown(table, &num_map));
+                output.push_str(&table_to_markdown(table, &num_map, &docx_media, media));
                 output.push('\n');
                 first_block = false;
             }
             DocumentChild::StructuredDataTag(sdt) => {
-                let md = sdt_to_markdown(sdt, &num_map);
+                let md = sdt_to_markdown(sdt, &num_map, &docx_media, media);
                 if !md.trim().is_empty() {
                     if !first_block {
                         output.push('\n');
@@ -78,6 +90,105 @@ pub fn docx_to_markdown(path: &str) -> Result<String, ConversionError> {
     }
 
     Ok(output)
+}
+
+/// Reopen the raw DOCX ZIP to resolve `word/_rels/document.xml.rels`
+/// (rId → media target) and read every `word/media/*` part's bytes.
+/// docx-rs itself doesn't expose these OOXML parts.
+fn load_docx_media(bytes: &[u8]) -> DocxMedia {
+    let mut rels = HashMap::new();
+    let mut parts = HashMap::new();
+
+    if let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) {
+        for i in 0..archive.len() {
+            if let Ok(mut entry) = archive.by_index(i) {
+                let name = entry.name().to_string();
+                if name == "word/_rels/document.xml.rels" {
+                    let mut content = String::new();
+                    if entry.read_to_string(&mut content).is_ok() {
+                        rels = parse_document_rels(&content);
+                    }
+                } else if name.starts_with("word/media/") {
+                    let mut buf = Vec::new();
+                    if entry.read_to_end(&mut buf).is_ok() {
+                        parts.insert(name, buf);
+                    }
+                }
+            }
+        }
+    }
+
+    DocxMedia { rels, parts }
+}
+
+/// Parse `word/_rels/document.xml.rels` into rId → resolved `word/media/...`
+/// path. `Target` is relative to the `word/` directory (e.g. `media/image1.png`).
+fn parse_document_rels(rels_xml: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for chunk in rels_xml.split("<Relationship ") {
+        if !chunk.contains("/image") {
+            continue;
+        }
+        if let (Some(id), Some(target)) = (get_rels_attr(chunk, "Id"), get_rels_attr(chunk, "Target")) {
+            map.insert(id, resolve_word_relative_path(&target));
+        }
+    }
+    map
+}
+
+fn get_rels_attr(s: &str, attr: &str) -> Option<String> {
+    let search = format!("{}=\"", attr);
+    let pos = s.find(&search)?;
+    let after = &s[pos + search.len()..];
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
+/// Resolve a path relative to `word/` (e.g. `media/image1.png`) into an
+/// absolute-in-archive path (e.g. `word/media/image1.png`).
+fn resolve_word_relative_path(target: &str) -> String {
+    let mut base: Vec<&str> = vec!["word"];
+    for segment in target.split('/') {
+        match segment {
+            "." | "" => {}
+            ".." => {
+                base.pop();
+            }
+            other => base.push(other),
+        }
+    }
+    base.join("/")
+}
+
+/// If `run` contains an embedded picture, extract it via `media` and return a
+/// Markdown image link (or an "(unsupported image)" note for non-renderable
+/// formats like EMF/WMF).
+fn run_image_markdown(run: &Run, docx_media: &DocxMedia, media: &mut MediaSink) -> Option<String> {
+    for child in &run.children {
+        if let RunChild::Drawing(drawing) = child {
+            if let Drawing {
+                data: Some(DrawingData::Pic(pic)),
+                ..
+            } = drawing.as_ref()
+            {
+                let media_path = docx_media.rels.get(&pic.id)?;
+                return Some(match docx_media.parts.get(media_path) {
+                    Some(bytes) => match media.add(media_path, bytes) {
+                        Some(rel_path) => format!("![]({})", rel_path),
+                        None => format!(
+                            "*(unsupported image: {})*",
+                            media_path.rsplit('/').next().unwrap_or(media_path)
+                        ),
+                    },
+                    None => format!(
+                        "*(unsupported image: {})*",
+                        media_path.rsplit('/').next().unwrap_or(media_path)
+                    ),
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Build a lookup from numbering id → is_ordered (true = numbered list, false = bullet).
@@ -126,7 +237,12 @@ fn is_ordered_format(val: &str) -> bool {
     )
 }
 
-fn paragraph_to_markdown(para: &Paragraph, num_map: &HashMap<usize, bool>) -> String {
+fn paragraph_to_markdown(
+    para: &Paragraph,
+    num_map: &HashMap<usize, bool>,
+    docx_media: &DocxMedia,
+    media: &mut MediaSink,
+) -> String {
     let style_id = para.property.style.as_ref().map(|s| s.val.to_lowercase());
     let style_str = style_id.as_deref().unwrap_or("");
 
@@ -185,7 +301,9 @@ fn paragraph_to_markdown(para: &Paragraph, num_map: &HashMap<usize, bool>) -> St
     for child in &para.children {
         match child {
             ParagraphChild::Run(run) => {
-                if let Some(seg) = run_to_segment(run, is_title) {
+                if let Some(img_md) = run_image_markdown(run, docx_media, media) {
+                    segments.push((img_md, false, false, false));
+                } else if let Some(seg) = run_to_segment(run, is_title) {
                     segments.push(seg);
                 }
             }
@@ -288,35 +406,43 @@ fn apply_inline_fmt(text: &str, bold: bool, italic: bool, strike: bool) -> Strin
     }
 }
 
-fn run_to_markdown(run: &Run) -> String {
+fn run_to_markdown(run: &Run, docx_media: &DocxMedia, media: &mut MediaSink) -> String {
+    if let Some(img_md) = run_image_markdown(run, docx_media, media) {
+        return img_md;
+    }
     match run_to_segment(run, false) {
         None => String::new(),
         Some((text, bold, italic, strike)) => apply_inline_fmt(&text, bold, italic, strike),
     }
 }
 
-fn sdt_to_markdown(sdt: &StructuredDataTag, num_map: &HashMap<usize, bool>) -> String {
+fn sdt_to_markdown(
+    sdt: &StructuredDataTag,
+    num_map: &HashMap<usize, bool>,
+    docx_media: &DocxMedia,
+    media: &mut MediaSink,
+) -> String {
     let mut output = String::new();
     for child in &sdt.children {
         match child {
             StructuredDataTagChild::Paragraph(para) => {
-                let md = paragraph_to_markdown(para, num_map);
+                let md = paragraph_to_markdown(para, num_map, docx_media, media);
                 if !md.trim().is_empty() {
                     output.push_str(&md);
                     output.push('\n');
                 }
             }
             StructuredDataTagChild::Table(table) => {
-                output.push_str(&table_to_markdown(table, num_map));
+                output.push_str(&table_to_markdown(table, num_map, docx_media, media));
             }
             StructuredDataTagChild::Run(run) => {
-                let md = run_to_markdown(run);
+                let md = run_to_markdown(run, docx_media, media);
                 if !md.is_empty() {
                     output.push_str(&md);
                 }
             }
             StructuredDataTagChild::StructuredDataTag(nested) => {
-                let md = sdt_to_markdown(nested, num_map);
+                let md = sdt_to_markdown(nested, num_map, docx_media, media);
                 if !md.is_empty() {
                     output.push_str(&md);
                 }
@@ -327,7 +453,12 @@ fn sdt_to_markdown(sdt: &StructuredDataTag, num_map: &HashMap<usize, bool>) -> S
     output
 }
 
-fn table_to_markdown(table: &Table, num_map: &HashMap<usize, bool>) -> String {
+fn table_to_markdown(
+    table: &Table,
+    num_map: &HashMap<usize, bool>,
+    docx_media: &DocxMedia,
+    media: &mut MediaSink,
+) -> String {
     let mut rows: Vec<Vec<String>> = Vec::new();
 
     for row_child in &table.rows {
@@ -338,7 +469,7 @@ fn table_to_markdown(table: &Table, num_map: &HashMap<usize, bool>) -> String {
             let mut cell_text = String::new();
             for content in &table_cell.children {
                 if let TableCellContent::Paragraph(para) = content {
-                    let p = paragraph_to_markdown(para, num_map);
+                    let p = paragraph_to_markdown(para, num_map, docx_media, media);
                     if !p.is_empty() {
                         if !cell_text.is_empty() {
                             cell_text.push(' ');
@@ -569,24 +700,34 @@ pub fn markdown_to_docx(markdown: &str, path: &str) -> Result<(), ConversionErro
 mod tests {
     use super::*;
 
+    fn empty_media() -> DocxMedia {
+        DocxMedia {
+            rels: HashMap::new(),
+            parts: HashMap::new(),
+        }
+    }
+
     #[test]
     fn test_run_to_markdown_bold() {
         let run = Run::new().add_text("hello").bold();
-        let result = run_to_markdown(&run);
+        let mut sink = MediaSink::new(std::env::temp_dir());
+        let result = run_to_markdown(&run, &empty_media(), &mut sink);
         assert_eq!(result, "**hello**");
     }
 
     #[test]
     fn test_run_to_markdown_plain() {
         let run = Run::new().add_text("hello");
-        let result = run_to_markdown(&run);
+        let mut sink = MediaSink::new(std::env::temp_dir());
+        let result = run_to_markdown(&run, &empty_media(), &mut sink);
         assert_eq!(result, "hello");
     }
 
     #[test]
     fn test_run_to_markdown_whitespace_bold_not_wrapped() {
         let run = Run::new().add_text("   ").bold();
-        let result = run_to_markdown(&run);
+        let mut sink = MediaSink::new(std::env::temp_dir());
+        let result = run_to_markdown(&run, &empty_media(), &mut sink);
         assert_eq!(result, "   ");
     }
 }

@@ -3,7 +3,7 @@ use pdfium_render::prelude::*;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-
+use super::media::MediaSink;
 use super::ConversionError;
 
 // Guards the one-time initialization of the global pdfium bindings.
@@ -11,7 +11,8 @@ static PDFIUM_INIT: Mutex<bool> = Mutex::new(false);
 
 const PDF_IMPORT_NOTICE: &str = "> **Import Notice**: This PDF was imported with layout analysis. \
 Headings and paragraphs are inferred from font sizes and spacing. \
-Images and complex multi-column layouts may not be fully preserved.\n\n";
+Embedded images are extracted where possible, but exact positioning and \
+complex multi-column layouts may not be fully preserved.\n\n";
 
 /// Convert Markdown to a PDF file.
 pub fn markdown_to_pdf(markdown: &str, path: &str) -> Result<(), ConversionError> {
@@ -20,7 +21,7 @@ pub fn markdown_to_pdf(markdown: &str, path: &str) -> Result<(), ConversionError
 }
 
 /// Convert a PDF file to Markdown using layout-aware extraction.
-pub fn pdf_to_markdown(path: &str) -> Result<String, ConversionError> {
+pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, ConversionError> {
     // Initialize pdfium bindings exactly once per process
     {
         let mut initialized = PDFIUM_INIT
@@ -44,8 +45,8 @@ pub fn pdf_to_markdown(path: &str) -> Result<String, ConversionError> {
         .map_err(|e| ConversionError(format!("Failed to open PDF: {}", e)))?;
 
     let mut md = String::from(PDF_IMPORT_NOTICE);
-    for page in doc.pages().iter() {
-        md.push_str(&extract_page_markdown(&page)?);
+    for (page_index, page) in doc.pages().iter().enumerate() {
+        md.push_str(&extract_page_markdown(&page, page_index, media)?);
         md.push('\n');
     }
 
@@ -131,10 +132,18 @@ struct TextBlock {
     y: f32,
     font_size: f32,
     text: String,
+    /// True for an already-formatted `![]()` image link — excluded from
+    /// heading classification since it has no meaningful font size.
+    is_image: bool,
 }
 
-fn extract_page_markdown(page: &PdfPage) -> Result<String, ConversionError> {
+fn extract_page_markdown(
+    page: &PdfPage,
+    page_index: usize,
+    media: &mut MediaSink,
+) -> Result<String, ConversionError> {
     let mut blocks: Vec<TextBlock> = Vec::new();
+    let mut image_index = 0usize;
 
     for obj in page.objects().iter() {
         if let Some(text_obj) = obj.as_text_object() {
@@ -152,6 +161,41 @@ fn extract_page_markdown(page: &PdfPage) -> Result<String, ConversionError> {
                 y: matrix.f(),
                 font_size,
                 text,
+                is_image: false,
+            });
+        } else if let Some(image_obj) = obj.as_image_object() {
+            let (x, y) = match obj.matrix() {
+                Ok(m) => (m.e(), m.f()),
+                Err(_) => (0.0, 0.0),
+            };
+            image_index += 1;
+            let part_name = format!("pdf-page{}-image{}.png", page_index + 1, image_index);
+            let md = match image_obj.get_raw_image() {
+                Ok(dynamic_image) => {
+                    let mut png_bytes: Vec<u8> = Vec::new();
+                    let encoded = dynamic_image
+                        .write_to(
+                            &mut std::io::Cursor::new(&mut png_bytes),
+                            image::ImageFormat::Png,
+                        )
+                        .is_ok();
+                    if encoded {
+                        match media.add(&part_name, &png_bytes) {
+                            Some(rel_path) => format!("![]({})", rel_path),
+                            None => "*(unsupported image)*".to_string(),
+                        }
+                    } else {
+                        "*(unsupported image)*".to_string()
+                    }
+                }
+                Err(_) => continue,
+            };
+            blocks.push(TextBlock {
+                x,
+                y,
+                font_size: 0.0,
+                text: md,
+                is_image: true,
             });
         }
     }
@@ -224,14 +268,18 @@ fn extract_page_markdown(page: &PdfPage) -> Result<String, ConversionError> {
             .map(|&i| blocks[i].font_size)
             .fold(0.0f32, f32::max);
         let y = blocks[line[0]].y;
+        let is_image_line = line.iter().all(|&i| blocks[i].is_image);
 
         // Insert blank line on large vertical gap between sections
         if prev_y != f32::MAX && (prev_y - y) > body_size * 2.5 {
             out.push('\n');
         }
 
-        // Classify heading level: first try font size ratio, then ALL-CAPS heuristic
-        let heading = if max_font >= body_size * 1.8 {
+        // Classify heading level: first try font size ratio, then ALL-CAPS heuristic.
+        // Image lines are never headings — they have no meaningful font size.
+        let heading = if is_image_line {
+            ""
+        } else if max_font >= body_size * 1.8 {
             "# "
         } else if max_font >= body_size * 1.4 {
             "## "

@@ -3,6 +3,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import Typography from '@tiptap/extension-typography';
 import Image from '@tiptap/extension-image';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import type { MarkdownSerializerState } from '@tiptap/pm/markdown';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -56,6 +57,12 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const [replaceVisible, setReplaceVisible] = useState(false);
   const document = documents.find(d => d.id === documentId);
 
+  // Read synchronously during render (not in an effect) so it's guaranteed to
+  // be current before the content-sync effect below calls setContent — that's
+  // when CustomImage's renderHTML resolves image `src`s against this dir.
+  const assetDirRef = useRef<string | null>(null);
+  assetDirRef.current = document?.assetDir ?? null;
+
   // Create lowlight instance with a smaller default language set
   // 'common' covers popular languages while keeping bundle size smaller
   const lowlight = useMemo(() => createLowlight(common), []);
@@ -83,6 +90,21 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
               attrs.style ? { style: attrs.style } : {},
           },
         };
+      },
+
+      // Sidecar images from import are stored as a *relative* markdown path
+      // (`assets/image1.png`, resolved against the active document's
+      // `assetDir`) so the .md source stays portable. For on-screen display
+      // only, rewrite that relative path to a `convertFileSrc()` asset:// URL
+      // that the webview can actually load; the stored node attrs (and thus
+      // the markdown serializer above) keep the original relative path.
+      renderHTML({ node, HTMLAttributes }) {
+        const src = HTMLAttributes.src as string | undefined;
+        const dir = assetDirRef.current;
+        if (src && dir && !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith('//')) {
+          HTMLAttributes = { ...HTMLAttributes, src: convertFileSrc(`${dir}/${src}`) };
+        }
+        return this.parent?.({ node, HTMLAttributes }) ?? ['img', HTMLAttributes];
       },
 
       addStorage() {

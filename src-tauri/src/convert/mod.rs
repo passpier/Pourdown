@@ -4,6 +4,7 @@ pub mod docx;
 pub mod xlsx;
 pub mod pdf;
 pub mod pptx;
+pub mod media;
 
 #[derive(Debug)]
 pub struct ConversionError(pub String);

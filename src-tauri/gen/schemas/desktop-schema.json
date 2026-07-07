@@ -2001,6 +2001,12 @@
           "markdownDescription": "Allows the delete_file command."
         },
         {
+          "description": "Allows the discard_media command.",
+          "type": "string",
+          "const": "allow-discard-media",
+          "markdownDescription": "Allows the discard_media command."
+        },
+        {
           "description": "Allows the enable_menu_item command.",
           "type": "string",
           "const": "allow-enable-menu-item",
@@ -2065,6 +2071,12 @@
           "type": "string",
           "const": "allow-read-markdown-file",
           "markdownDescription": "Allows the read_markdown_file command."
+        },
+        {
+          "description": "Allows the relocate_media command.",
+          "type": "string",
+          "const": "allow-relocate-media",
+          "markdownDescription": "Allows the relocate_media command."
         },
         {
           "description": "Allows the rename_file command.",
