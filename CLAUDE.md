@@ -10,10 +10,11 @@ Pourdown is a Tauri v2 desktop Markdown editor (React 18 + TypeScript frontend, 
 
 - `src/` — React frontend (Vite, TypeScript, Tailwind CSS, Tiptap editor, Zustand state, i18next)
   - `components/{Sidebar,Toolbar,Search,CodeBlockRenderer,Editor}`, `stores/`, `extensions/`, `theme/`, `hooks/`, `lib/`, `i18n/locales/`
-- `src-tauri/` — Rust backend, single crate named `Pourdown` (no Cargo workspace)
-  - `src/convert/{docx,pdf,pptx,xlsx}.rs` — per-format conversion to/from Markdown
+- `src-tauri/` — Rust backend, single crate named `Pourdown` (no Cargo workspace, no `lib.rs` — everything is a module of the `Pourdown` binary)
+  - `src/convert/{docx,pdf,pptx,xlsx,html}.rs` — per-format conversion to/from Markdown, each with an inline `#[cfg(test)]` test module (unit tests for pure helpers + fixture-backed end-to-end tests)
+  - `src/fixture_gen.rs` — regenerates the binary fixtures under `tests/fixtures/sample.{docx,xlsx,pptx,pdf}` used by those end-to-end tests (test-only, `#[ignore]`d by default; see its doc comment)
   - `tauri.conf.json`, `capabilities/`, `permissions/`
-- No `tests/` directory exists anywhere in the repo — there is no automated test suite for conversion logic.
+- No frontend test runner is set up — only the Rust conversion logic has automated tests.
 
 ## Commands
 
@@ -22,7 +23,8 @@ Pourdown is a Tauri v2 desktop Markdown editor (React 18 + TypeScript frontend, 
 - `pnpm build` — `tsc && vite build`
 - `pnpm tauri build` — production desktop build
 - `pnpm lint` — `tsc --noEmit && eslint .` (ESLint flat config at `eslint.config.js`)
-- `cd src-tauri && cargo clippy --all-targets` — Rust lint (no `cargo test` suite exists; verify Rust conversion changes by running the app and importing a sample file — see `/verify-conversion` skill)
+- `cd src-tauri && cargo clippy --all-targets` — Rust lint
+- `cd src-tauri && cargo test` — runs the conversion test suite (inline `#[cfg(test)]` modules per converter, fixture-backed end-to-end tests under `tests/fixtures/`). This is the **primary** way to verify a change to `src-tauri/src/convert/*.rs` — prefer it over manually running the app; see `/verify-conversion` skill for the test-first workflow and when manual app verification is still the right fallback.
 - Package manager is **pnpm** (not npm/yarn) — `pnpm-lock.yaml` is present.
 
 ## Rust crate API gotchas (verified against installed versions)
@@ -50,7 +52,18 @@ in `Editor.tsx`, which resolves the document's `assetDir` via `convertFileSrc`.
 - xlsx import is capped at 500 rows per sheet; embedded images can't be
   mapped to a specific sheet/cell (best-effort "Embedded Images" section).
 - PDF import infers layout, not an exact reconstruction; image placement is
-  approximate for complex/multi-column layouts.
+  approximate for complex/multi-column layouts. Tables are detected via
+  conservative geometry clustering (`detect_table_regions` in
+  `convert/pdf.rs`, requires ≥2 aligned columns across ≥3 consecutive rows)
+  and rendered as GFM tables, with wrapped cells merged back via `<br>`; a
+  cell whose wrapped content is itself a bulleted/indented list falls outside
+  the alignment tolerance and drops that row back to prose instead of
+  corrupting the table — a deliberate conservative trade-off, not a bug.
+  Dot-leader lines (Table of Contents entries, e.g. `Introduction .... 5`)
+  are explicitly excluded from table detection (`row_has_dot_leader` in
+  `convert/pdf.rs`) and instead rendered as a flat bulleted list with the
+  leader collapsed to `…`, since they otherwise satisfy the column-alignment
+  gates but aren't tabular data.
 - Vector image formats (EMF/WMF, common in Office exports) can't be rendered
   by the webview — replaced with an `*(unsupported image)*` note.
 - pptx animations are dropped (not representable in Markdown).
