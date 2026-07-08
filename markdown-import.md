@@ -105,6 +105,17 @@ standardized read/print, respectively).
 - Large vertical gaps between lines insert a blank line to preserve paragraph
   breaks. An import notice is prepended noting that layout is inferred, not
   exact.
+- Tables are detected with conservative geometry clustering: visual lines are
+  segmented into cells on large horizontal gaps, and a table region only
+  starts where at least three consecutive lines share the same ≥2 column
+  x-positions (`detect_table_regions` in `convert/pdf.rs`) — this avoids
+  misreading incidental two-line alignment (e.g. a "Name: / Role:" pair) as a
+  table. A wrapped cell that continues onto its own physical line (its text
+  aligns under one interior column, other columns empty) is merged back into
+  the row above with `<br>`. Detected regions render as GFM tables. As a
+  hybrid confirming signal, ruling lines drawn as PDF path objects are used
+  to refuse a continuation merge across an explicit row separator — this
+  never loosens the geometry gate, so borderless tables are unaffected.
 - Embedded images are extracted from each page's image objects and written as
   sidecar files, positioned in reading order alongside the surrounding text;
   exact placement is approximate for complex layouts.
@@ -142,7 +153,10 @@ rather than a broken image link.
 - xlsx import is capped at 500 rows per sheet; embedded images can't be
   mapped to a specific sheet/cell and are listed separately.
 - PDF import infers layout, not an exact reconstruction; image placement in
-  complex/multi-column layouts is approximate.
+  complex/multi-column layouts is approximate. Table detection is
+  conservative by design: a table whose wrapped cell content is itself an
+  indented/bulleted list (outside the column-alignment tolerance) drops that
+  row back to plain paragraphs rather than corrupting the table.
 - docx, pptx, and PDF images in vector formats (EMF/WMF) can't be rendered by
   the webview and are replaced with a text note.
 - pptx animations are dropped (not representable in Markdown).
