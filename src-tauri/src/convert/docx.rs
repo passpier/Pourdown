@@ -22,7 +22,11 @@ struct DocxMedia {
 /// Known limitations (by design, not surfaced as errors):
 /// - Track changes, comments, footnotes are dropped
 /// - Complex layouts (text boxes, columns) may have scrambled order
-/// - TOC is replaced with an HTML comment placeholder
+/// - TOC fields are replaced with an HTML comment placeholder, but the TOC
+///   entries themselves (rendered as paragraphs of internal-anchor
+///   hyperlinks) are preserved as Markdown anchor links (`[text](#anchor)`),
+///   matching MarkItDown's import output. The anchors won't resolve against
+///   Markdown's auto-generated heading slugs, but are kept for fidelity.
 /// - Vector image formats (EMF/WMF) can't render in the webview; a text note
 ///   is emitted in their place
 pub fn docx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, ConversionError> {
@@ -317,8 +321,14 @@ fn paragraph_to_markdown(
                         HyperlinkData::External { path, .. } => {
                             format!("[{}]({})", inner, path)
                         }
-                        // Internal anchors are dead links in exported markdown — plain text.
-                        HyperlinkData::Anchor { .. } => inner,
+                        // Internal anchor (e.g. TOC entries): keep as a Markdown
+                        // anchor link to match MarkItDown's import output. The
+                        // target won't resolve against Markdown's auto-generated
+                        // heading slugs, but we preserve it for fidelity.
+                        HyperlinkData::Anchor { anchor } if !anchor.is_empty() => {
+                            format!("[{}](#{})", inner, anchor)
+                        }
+                        HyperlinkData::Anchor { .. } => inner, // empty anchor -> plain text
                     };
                     segments.push((linked, false, false, false));
                 }
@@ -548,6 +558,18 @@ mod tests {
         let mut sink = MediaSink::new(std::env::temp_dir());
         let result = run_to_markdown(&run, &empty_media(), &mut sink);
         assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_paragraph_anchor_hyperlink_becomes_link() {
+        use docx_rs::{Hyperlink, HyperlinkType};
+        let para = Paragraph::new().add_hyperlink(
+            Hyperlink::new("_Toc181806136", HyperlinkType::Anchor)
+                .add_run(Run::new().add_text("TABLE OF CONTENTS 1")),
+        );
+        let mut sink = MediaSink::new(std::env::temp_dir());
+        let md = paragraph_to_markdown(&para, &HashMap::new(), &empty_media(), &mut sink);
+        assert_eq!(md, "[TABLE OF CONTENTS 1](#_Toc181806136)");
     }
 
     #[test]
