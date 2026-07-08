@@ -101,6 +101,27 @@ fn pdfium_lib_path() -> PathBuf {
     PathBuf::from(Pdfium::pdfium_platform_library_name())
 }
 
+/// True if `text` contains a run of at least 4 dots (a TOC "dot leader"),
+/// ignoring interior spaces so a spaced-out leader (". . . .") still counts.
+/// Any other character resets the run, so an ellipsis ("...") or a version
+/// number ("1.2.3") don't false-positive.
+fn contains_dot_leader(text: &str) -> bool {
+    let mut run = 0u32;
+    for c in text.chars() {
+        match c {
+            '.' => {
+                run += 1;
+                if run >= 4 {
+                    return true;
+                }
+            }
+            ' ' | '\u{00A0}' => {}
+            _ => run = 0,
+        }
+    }
+    false
+}
+
 /// Returns true for short lines that are all-uppercase (or CJK-only) with no sentence ending.
 /// Used as a fallback heading detector when all text in the PDF has the same font size.
 fn is_all_caps_heading(text: &str) -> bool {
@@ -110,7 +131,7 @@ fn is_all_caps_heading(text: &str) -> bool {
         return false;
     }
     // Dot-leader lines are TOC entries, not headings
-    if text.contains("....") {
+    if contains_dot_leader(text) {
         return false;
     }
     // No sentence-ending punctuation
@@ -230,6 +251,51 @@ fn try_continuation(row: &[Cell], columns: &[f32], tol: f32) -> Option<Vec<(usiz
     Some(mapped)
 }
 
+/// True if any cell in `row` contains a dot leader — used to keep TOC lines
+/// (which otherwise often satisfy the column-alignment gates below) out of
+/// table detection entirely.
+fn row_has_dot_leader(row: &[Cell]) -> bool {
+    row.iter().any(|c| contains_dot_leader(&c.text))
+}
+
+/// Collapses a TOC line's dot leader (runs of 4+ dots, possibly spaced out)
+/// into a compact " … " separator, e.g. "Introduction ........ 5" becomes
+/// "Introduction … 5". Non-leader text is left untouched.
+fn collapse_dot_leader(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush_run = |out: &mut String, run: &mut String| {
+        if run.chars().filter(|&c| c == '.').count() >= 4 {
+            out.push_str(" … ");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        match c {
+            '.' | ' ' | '\u{00A0}' => run.push(c),
+            _ => {
+                flush_run(&mut out, &mut run);
+                out.push(c);
+            }
+        }
+    }
+    flush_run(&mut out, &mut run);
+    // Collapse whitespace left by the leader (e.g. before the trailing page
+    // number) down to single spaces, and trim stray edges.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Ensures `out` ends with a blank line (two trailing newlines), unless it's
+/// empty. Used to open/close the TOC bullet list around other content
+/// without depending on the unrelated vertical-gap blank-line heuristic.
+fn ensure_blank_line(out: &mut String) {
+    if !out.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+}
+
 /// True if a horizontal rule line falls strictly between `y_upper` (the
 /// previous line) and `y_lower` (the current line). Used to refuse merging a
 /// row as a continuation when the source PDF explicitly separated it with a
@@ -261,7 +327,11 @@ fn detect_table_regions(
     let mut regions = Vec::new();
     let mut i = 0;
     while i < rows.len() {
-        if rows[i].len() < 2 {
+        // Dot-leader rows (TOC entries) are never a table seed — they often
+        // satisfy the column-alignment gates below (title cell + page-number
+        // cell, roughly aligned across consecutive entries) but are prose,
+        // not tabular data.
+        if rows[i].len() < 2 || row_has_dot_leader(&rows[i]) {
             i += 1;
             continue;
         }
@@ -273,7 +343,10 @@ fn detect_table_regions(
         let columns: Vec<f32> = rows[i].iter().map(|c| c.x_start).collect();
         let mut core_end = i;
         let mut j = i + 1;
-        while j < rows.len() && columns_match(&rows[j], &columns, tol) {
+        while j < rows.len()
+            && columns_match(&rows[j], &columns, tol)
+            && !row_has_dot_leader(&rows[j])
+        {
             core_end = j;
             j += 1;
         }
@@ -290,7 +363,7 @@ fn detect_table_regions(
         let mut k = core_end + 1;
         while k < rows.len() {
             let row = &rows[k];
-            if row.is_empty() {
+            if row.is_empty() || row_has_dot_leader(row) {
                 break;
             }
             if columns_match(row, &columns, tol) {
@@ -549,12 +622,21 @@ fn extract_page_markdown(
     let mut prev_y = f32::MAX;
     let mut region_idx = 0;
     let mut i = 0;
+    // Tracks whether the previous emitted line was a TOC entry, so
+    // consecutive entries form one contiguous Markdown list and a blank line
+    // opens/closes the list around non-TOC content.
+    let mut prev_was_toc = false;
 
     while i < lines.len() {
         // Emit a whole detected table region in one shot, then skip past it.
         if region_idx < regions.len() && regions[region_idx].start_line == i {
             let region = &regions[region_idx];
             let y = line_ys[i];
+
+            if prev_was_toc {
+                ensure_blank_line(&mut out);
+            }
+            prev_was_toc = false;
 
             if prev_y != f32::MAX && (prev_y - y) > body_size * 2.5 {
                 out.push('\n');
@@ -586,6 +668,26 @@ fn extract_page_markdown(
             .fold(0.0f32, f32::max);
         let y = line_ys[i];
         let is_image_line = line.iter().all(|&idx| blocks[idx].is_image);
+
+        // TOC entries (dot-leader lines) render as a flat bullet list instead
+        // of prose/headings, with the leader collapsed to a compact "…".
+        let is_toc = !is_image_line && contains_dot_leader(&line_text);
+        if is_toc {
+            if !prev_was_toc {
+                ensure_blank_line(&mut out);
+            }
+            out.push_str("- ");
+            out.push_str(&collapse_dot_leader(&line_text));
+            out.push('\n');
+            prev_y = y;
+            prev_was_toc = true;
+            i += 1;
+            continue;
+        }
+        if prev_was_toc {
+            ensure_blank_line(&mut out);
+        }
+        prev_was_toc = false;
 
         // Insert blank line on large vertical gap between sections
         if prev_y != f32::MAX && (prev_y - y) > body_size * 2.5 {
@@ -636,6 +738,28 @@ mod tests {
     #[test]
     fn test_all_caps_heading_rejects_dot_leader() {
         assert!(!is_all_caps_heading("SECTION ONE...."));
+    }
+
+    #[test]
+    fn test_contains_dot_leader_positive() {
+        assert!(contains_dot_leader("Introduction ........ 5"));
+        assert!(contains_dot_leader("Introduction . . . . 5")); // spaced-out leader
+    }
+
+    #[test]
+    fn test_contains_dot_leader_rejects_short_runs() {
+        assert!(!contains_dot_leader("Wait... what?")); // ellipsis
+        assert!(!contains_dot_leader("See section 1.2.3 for details")); // version-like
+        assert!(!contains_dot_leader("Ordinary prose."));
+    }
+
+    #[test]
+    fn test_collapse_dot_leader() {
+        assert_eq!(
+            collapse_dot_leader("TABLE OF CONTENTS .................. 1"),
+            "TABLE OF CONTENTS … 1"
+        );
+        assert_eq!(collapse_dot_leader("No leader here"), "No leader here");
     }
 
     #[test]
@@ -732,6 +856,21 @@ mod tests {
         ];
         let ys2 = vec![300.0, 280.0];
         assert!(detect_table_regions(&key_value, &ys2, &[], 12.0).is_empty());
+    }
+
+    #[test]
+    fn test_detect_table_regions_rejects_toc_dot_leaders() {
+        // A TOC page: each entry is a "title + dot leader" cell and a
+        // page-number cell, roughly aligned across entries — exactly the
+        // shape that would otherwise satisfy the column-alignment gates.
+        let toc = vec![
+            aligned_row(&[(0.0, "TABLE OF CONTENTS ...................."), (400.0, "1")]),
+            aligned_row(&[(0.0, "DOCUMENT CONTROL ....................."), (400.0, "3")]),
+            aligned_row(&[(0.0, "1. ABOUT THIS DOCUMENT ..............."), (400.0, "4")]),
+            aligned_row(&[(0.0, "2. INTRODUCTION ......................"), (400.0, "5")]),
+        ];
+        let ys = vec![400.0, 380.0, 360.0, 340.0];
+        assert!(detect_table_regions(&toc, &ys, &[], 12.0).is_empty());
     }
 
     #[test]
