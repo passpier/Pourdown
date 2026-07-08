@@ -17,6 +17,8 @@
     "open_folder_to_browse": "開啟資料夾以瀏覽檔案",
     "tab_files": "檔案",
     "tab_search": "搜尋",
+    "tab_outline": "大綱",
+    "no_headings": "此文件沒有標題",
     "workspace_empty": "工作區",
     "files": "檔案",
     "results": "搜尋結果",

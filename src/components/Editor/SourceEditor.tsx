@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import {
   scanMarkdownBlocks,
+  scanMarkdownHeadings,
   computeSegmentAnchor,
   resolveSegmentScrollTop,
   measureTextareaLineOffsets,
@@ -45,6 +46,8 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
   const setPendingAnchor = useEditorStore((state) => state.setPendingAnchor);
   const consumePendingAnchor = useEditorStore((state) => state.consumePendingAnchor);
+  const setActiveHeadingIndex = useEditorStore((state) => state.setActiveHeadingIndex);
+  const scrollToHeadingRequest = useEditorStore((state) => state.scrollToHeadingRequest);
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const layoutMetrics = useEditorLayout(containerRef);
@@ -227,6 +230,79 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   useEffect(() => {
     setFindBarVisible(false);
   }, [documentId, setFindBarVisible]);
+
+  // Cache measured heading Ys per (content, textarea width) so scroll-spy
+  // doesn't rebuild the offscreen mirror div (`measureTextareaLineOffsets`)
+  // on every scroll tick — only when the text or wrapping actually changed.
+  const headingYCacheRef = useRef<{ content: string; width: number; headings: ReturnType<typeof scanMarkdownHeadings>; ys: number[] } | null>(null);
+  const getHeadingLandmarks = useCallback((textarea: HTMLTextAreaElement, text: string) => {
+    const cache = headingYCacheRef.current;
+    if (cache && cache.content === text && cache.width === textarea.clientWidth) {
+      return { headings: cache.headings, ys: cache.ys };
+    }
+    const headings = scanMarkdownHeadings(text);
+    const ys = measureTextareaLineOffsets(textarea, text, headings.map((h) => h.charOffset));
+    headingYCacheRef.current = { content: text, width: textarea.clientWidth, headings, ys };
+    return { headings, ys };
+  }, []);
+
+  // Outline scroll-spy: report whichever heading sits at (or just above) the
+  // textarea's scrollTop, throttled to at most once per animation frame.
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    let rafId: number | null = null;
+    const updateActiveHeading = () => {
+      rafId = null;
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const { headings, ys } = getHeadingLandmarks(ta, contentRef.current);
+      if (headings.length === 0) {
+        setActiveHeadingIndex(null);
+        return;
+      }
+      let active: number | null = null;
+      for (let i = 0; i < headings.length; i++) {
+        if (ys[i] <= ta.scrollTop + 4) {
+          active = headings[i].index;
+        } else {
+          break;
+        }
+      }
+      setActiveHeadingIndex(active);
+    };
+
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(updateActiveHeading);
+    };
+
+    updateActiveHeading();
+    textarea.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      textarea.removeEventListener('scroll', onScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      setActiveHeadingIndex(null);
+    };
+  }, [documentId, content, getHeadingLandmarks, setActiveHeadingIndex]);
+
+  // Outline click-to-scroll: consume a scroll request fired from
+  // OutlinePanel and scroll/select the target heading.
+  useEffect(() => {
+    if (!scrollToHeadingRequest) return;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const { headings, ys } = getHeadingLandmarks(textarea, contentRef.current);
+    const targetIdx = headings.findIndex((h) => h.index === scrollToHeadingRequest.index);
+    if (targetIdx === -1) return;
+    const heading = headings[targetIdx];
+    textarea.focus();
+    textarea.setSelectionRange(heading.charOffset, heading.charOffset);
+    textarea.scrollTop = Math.max(0, ys[targetIdx] - 4);
+    // Only the nonce should re-trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToHeadingRequest?.nonce]);
 
   const matches = findMatches(content, searchTerm);
   const matchCount = matches.length;

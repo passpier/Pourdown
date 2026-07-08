@@ -14,6 +14,7 @@ interface UIState {
   sidebarQuery: string;
   sidebarSearchFocusNonce: number;
   findBarVisible: boolean;
+  sidebarTab: 'files' | 'outline';
   // Actions
   setCurrentTheme: (theme: ThemeName) => void;
   toggleTheme: () => void;
@@ -30,9 +31,10 @@ interface UIState {
   requestSidebarSearchFocus: () => void;
   setFindBarVisible: (visible: boolean) => void;
   toggleFindBar: () => void;
+  setSidebarTab: (tab: 'files' | 'outline') => void;
 }
 
-type PersistedUIState = Pick<UIState, 'currentTheme' | 'sidebarVisible' | 'fontSize' | 'fontFamily' | 'sidebarWidth' | 'sidebarQuery'>;
+type PersistedUIState = Pick<UIState, 'currentTheme' | 'sidebarVisible' | 'fontSize' | 'fontFamily' | 'sidebarWidth' | 'sidebarQuery' | 'sidebarTab'>;
 
 export const useUIStore = create<UIState>()(
   persist(
@@ -46,6 +48,7 @@ export const useUIStore = create<UIState>()(
       sidebarQuery: '',
       sidebarSearchFocusNonce: 0,
       findBarVisible: false,
+      sidebarTab: 'files',
       osPlatform: (() => {
         if (typeof navigator !== 'undefined') {
           if (navigator.userAgent.includes('Macintosh')) return 'macos';
@@ -125,10 +128,12 @@ export const useUIStore = create<UIState>()(
 
       toggleFindBar: () =>
         set((state) => ({ findBarVisible: !state.findBarVisible })),
+
+      setSidebarTab: (tab) => set({ sidebarTab: tab }),
     }),
     {
       name: 'ui-preferences',
-      version: 2,
+      version: 3,
       migrate: (persistedState) => persistedState,
       partialize: (state): PersistedUIState => ({
         currentTheme: state.currentTheme,
@@ -137,6 +142,7 @@ export const useUIStore = create<UIState>()(
         fontFamily: state.fontFamily,
         sidebarWidth: state.sidebarWidth,
         sidebarQuery: state.sidebarQuery,
+        sidebarTab: state.sidebarTab,
         // osPlatform, editorMode, and findBarVisible are excluded from persistence
       }),
       onRehydrate: (state: unknown) => {

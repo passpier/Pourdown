@@ -38,6 +38,8 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const setEditor = useEditorStore((state) => state.setEditor);
   const setPendingAnchor = useEditorStore((state) => state.setPendingAnchor);
   const consumePendingAnchor = useEditorStore((state) => state.consumePendingAnchor);
+  const setActiveHeadingIndex = useEditorStore((state) => state.setActiveHeadingIndex);
+  const scrollToHeadingRequest = useEditorStore((state) => state.scrollToHeadingRequest);
   const findBarVisible = useUIStore((state) => state.findBarVisible);
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -441,6 +443,83 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   useEffect(() => {
     setFindBarVisible(false);
   }, [documentId, setFindBarVisible]);
+
+  // Every heading node in document order, paired with its ProseMirror
+  // position, keyed by a 0-based ordinal across only headings — this matches
+  // `scanMarkdownHeadings`'s ordinal (both walk document order and skip
+  // everything that isn't a "real" heading), so an OutlinePanel row's index
+  // addresses the same heading here.
+  const getHeadingNodes = useCallback((ed: NonNullable<typeof editor>) => {
+    const nodes: { index: number; offset: number }[] = [];
+    let index = -1;
+    ed.state.doc.forEach((node, offset) => {
+      if (node.type.name === 'heading') {
+        index += 1;
+        nodes.push({ index, offset });
+      }
+    });
+    return nodes;
+  }, []);
+
+  // Outline scroll-spy: report whichever heading sits at (or just above) the
+  // container's viewport-top, throttled to at most once per animation frame
+  // so scrolling stays smooth.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!editor || !container) return;
+
+    let rafId: number | null = null;
+    const updateActiveHeading = () => {
+      rafId = null;
+      const headingNodes = getHeadingNodes(editor);
+      if (headingNodes.length === 0) {
+        setActiveHeadingIndex(null);
+        return;
+      }
+      const containerTop = container.getBoundingClientRect().top;
+      let active: number | null = null;
+      for (const { index, offset } of headingNodes) {
+        const dom = editor.view.nodeDOM(offset);
+        const el = dom instanceof HTMLElement ? dom : dom?.parentElement;
+        if (!el) continue;
+        const y = el.getBoundingClientRect().top - containerTop;
+        if (y <= 24) {
+          active = index;
+        } else {
+          break;
+        }
+      }
+      setActiveHeadingIndex(active);
+    };
+
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(updateActiveHeading);
+    };
+
+    updateActiveHeading();
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      setActiveHeadingIndex(null);
+    };
+  }, [editor, document?.content, getHeadingNodes, setActiveHeadingIndex]);
+
+  // Outline click-to-scroll: consume a scroll request fired from
+  // OutlinePanel and scroll the target heading into view.
+  useEffect(() => {
+    if (!editor || !scrollToHeadingRequest) return;
+    const headingNodes = getHeadingNodes(editor);
+    const target = headingNodes.find((h) => h.index === scrollToHeadingRequest.index);
+    if (!target) return;
+    const dom = editor.view.nodeDOM(target.offset);
+    const el = dom instanceof HTMLElement ? dom : dom?.parentElement;
+    el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    // Only the nonce should re-trigger this; editor/getHeadingNodes are
+    // stable identities we don't want to re-run on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToHeadingRequest?.nonce]);
 
   const matchCount = (editor?.storage['search'] as SearchStorage | undefined)?.results?.length ?? 0;
   const currentMatch = matchCount > 0 ? ((editor?.storage['search'] as SearchStorage | undefined)?.currentIndex ?? 0) + 1 : 0;
