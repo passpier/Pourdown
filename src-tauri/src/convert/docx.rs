@@ -557,4 +557,32 @@ mod tests {
         let result = run_to_markdown(&run, &empty_media(), &mut sink);
         assert_eq!(result, "   ");
     }
+
+    /// End-to-end regression test against `tests/fixtures/sample.docx`
+    /// (see `src/fixture_gen.rs` for how it's generated). Covers heading
+    /// detection, bold/italic/strike, bullet + numbered lists, tables, and
+    /// embedded images together, since those are the documented per-format
+    /// behaviors in markdown-import.md.
+    #[test]
+    fn test_docx_to_markdown_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.docx");
+        let dir = std::env::temp_dir().join(format!("pourdown-docx-fixture-{}", std::process::id()));
+        let mut sink = MediaSink::new(dir.clone());
+
+        let md = docx_to_markdown(path, &mut sink).expect("docx_to_markdown should succeed");
+
+        assert!(md.contains("# Sample Heading"), "heading not detected:\n{md}");
+        assert!(md.contains("**bold**"), "bold run not detected:\n{md}");
+        assert!(md.contains("*italic*"), "italic run not detected:\n{md}");
+        assert!(md.contains("~~struck~~"), "strike run not detected:\n{md}");
+        assert!(md.contains("- First bullet"), "bullet list not detected:\n{md}");
+        assert!(md.contains("1. First step"), "numbered list not detected:\n{md}");
+        assert!(md.contains("| Name |") && md.contains("| Ada |"), "table not detected:\n{md}");
+        assert!(md.contains("![](assets/image1.png)"), "image link not detected:\n{md}");
+        // MediaSink's assets_dir *is* the assets folder (see `assets_dir` in
+        // main.rs), so the file lands directly under `dir`, not `dir/assets`.
+        assert!(dir.join("image1.png").exists(), "image sidecar file not written");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

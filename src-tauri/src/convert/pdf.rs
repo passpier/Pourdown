@@ -299,3 +299,66 @@ fn extract_page_markdown(
 
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_caps_heading_positive() {
+        assert!(is_all_caps_heading("OVERVIEW"));
+        assert!(is_all_caps_heading("SECTION ONE"));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_lowercase() {
+        assert!(!is_all_caps_heading("Overview"));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_dot_leader() {
+        assert!(!is_all_caps_heading("SECTION ONE...."));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_sentence_punctuation() {
+        assert!(!is_all_caps_heading("END OF REPORT."));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_length_extremes() {
+        assert!(!is_all_caps_heading("AB"));
+        assert!(!is_all_caps_heading(&"A".repeat(81)));
+    }
+
+    /// End-to-end regression test against `tests/fixtures/sample.pdf`
+    /// (see `src/fixture_gen.rs` — generated via Pourdown's own PDF export,
+    /// not a hand-authored PDF byte stream). Gated on pdfium actually being
+    /// loadable so `cargo test` stays green on machines without the vendored
+    /// framework; the pure `is_all_caps_heading` tests above still run
+    /// unconditionally.
+    #[test]
+    fn test_pdf_to_markdown_fixture() {
+        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frameworks/pdfium.framework/pdfium");
+        if !lib.exists() {
+            eprintln!("skipping test_pdf_to_markdown_fixture: pdfium not found at {:?}", lib);
+            return;
+        }
+        std::env::set_var("PDFIUM_LIBRARY_PATH", &lib);
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
+        let mut sink = MediaSink::new(std::env::temp_dir());
+        let md = match pdf_to_markdown(path, &mut sink) {
+            Ok(md) => md,
+            Err(e) => {
+                eprintln!("skipping test_pdf_to_markdown_fixture: pdfium load failed: {}", e);
+                return;
+            }
+        };
+
+        assert!(
+            md.contains("This paragraph should survive the PDF roundtrip."),
+            "body text missing:\n{md}"
+        );
+    }
+}

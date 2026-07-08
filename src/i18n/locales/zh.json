@@ -6,7 +6,7 @@
     "no_document_open": "未開啟文件",
     "create_or_open": "建立新文件或開啟現有文件",
     "toggle_sidebar": "切換側邊欄",
-    "markdown_editor": "Markdown 編輯器",
+    "markdown_editor": "Pourdown",
     "char_count": "{{n}} 字元"
   },
   "sidebar": {

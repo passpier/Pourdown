@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod convert;
+#[cfg(test)]
+mod fixture_gen;
 
 use std::collections::VecDeque;
 use std::fs;

@@ -365,3 +365,63 @@ fn xml_decode(s: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xml_decode() {
+        assert_eq!(
+            xml_decode("A &amp; B &lt;tag&gt; &quot;q&quot; &apos;s&apos;"),
+            "A & B <tag> \"q\" 's'"
+        );
+    }
+
+    #[test]
+    fn test_resolve_slide_relative_path() {
+        assert_eq!(resolve_slide_relative_path("../media/image1.png"), "ppt/media/image1.png");
+    }
+
+    #[test]
+    fn test_parse_slide_rels() {
+        let xml = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
+        let map = parse_slide_rels(xml);
+        assert_eq!(map.get("rId1").unwrap(), "ppt/media/image1.png");
+    }
+
+    #[test]
+    fn test_find_placeholder_title() {
+        let xml = r#"<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Hello</a:t></a:r></a:p></p:txBody></p:sp>"#;
+        assert_eq!(find_placeholder_title(xml), Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_extract_paragraphs_first_para_then_bullet() {
+        let xml = "<a:p><a:r><a:t>First</a:t></a:r></a:p><a:p><a:r><a:t>Second</a:t></a:r></a:p>";
+        let (first, body) = extract_paragraphs(xml, None);
+        assert_eq!(first, Some("First".to_string()));
+        assert_eq!(body, "- Second");
+    }
+
+    /// End-to-end regression test against `tests/fixtures/sample.pptx`
+    /// (see `src/fixture_gen.rs`). Covers the slide-title/`---`-separator
+    /// structure, bold formatting, bullets, and embedded images together.
+    #[test]
+    fn test_pptx_to_markdown_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pptx");
+        let dir = std::env::temp_dir().join(format!("pourdown-pptx-fixture-{}", std::process::id()));
+        let mut sink = MediaSink::new(dir.clone());
+
+        let md = pptx_to_markdown(path, &mut sink).expect("pptx_to_markdown should succeed");
+
+        assert!(md.contains("# Slide One"), "slide 1 title missing:\n{md}");
+        assert!(md.contains("**Bold intro**"), "bold body text missing:\n{md}");
+        assert!(md.contains("---"), "slide separator missing:\n{md}");
+        assert!(md.contains("# Slide Two"), "slide 2 title missing:\n{md}");
+        assert!(md.contains("- First bullet"), "bullet not detected:\n{md}");
+        assert!(md.contains("![](assets/image1.png)"), "image link missing:\n{md}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

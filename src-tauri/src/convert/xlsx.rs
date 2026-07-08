@@ -390,4 +390,27 @@ mod tests {
         let merged = merge_continuation_rows(rows);
         assert_eq!(merged.len(), 2);
     }
+
+    /// End-to-end regression test against `tests/fixtures/sample.xlsx`
+    /// (see `src/fixture_gen.rs`). Covers per-sheet sectioning, ISO-date
+    /// reformatting of a header-detected date column, and newline collapse.
+    #[test]
+    fn test_xlsx_to_markdown_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.xlsx");
+        let mut sink = MediaSink::new(std::env::temp_dir());
+
+        let md = xlsx_to_markdown(path, &mut sink).expect("xlsx_to_markdown should succeed");
+
+        assert!(md.contains("## Data"), "first sheet section missing:\n{md}");
+        assert!(md.contains("## Notes"), "second sheet section missing:\n{md}");
+        assert!(
+            md.contains(&excel_serial_to_date(45000)),
+            "date serial not reformatted:\n{md}"
+        );
+        assert!(md.contains("Line one Line two"), "newline in cell not collapsed:\n{md}");
+        assert!(
+            !md.contains("rows were omitted"),
+            "small sheet should not trigger the 500-row cap note:\n{md}"
+        );
+    }
 }
