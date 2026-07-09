@@ -1,16 +1,19 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { normalizeLanguage } from '@/lib/codeBlockUtils';
 import { Copy, Check, Trash2, ChevronDown } from 'lucide-react';
 
-let mermaidInitialized = false;
-let mermaidModule: typeof import('mermaid') | null = null;
+type MermaidNamespace = typeof import('mermaid');
+type MermaidInstance = import('mermaid').Mermaid;
 
-const loadMermaid = async () => {
+let mermaidInitialized = false;
+let mermaidModule: MermaidNamespace | null = null;
+
+const loadMermaid = async (): Promise<MermaidInstance> => {
   if (!mermaidModule) {
     mermaidModule = await import('mermaid');
   }
-  return (mermaidModule as any).default ?? mermaidModule;
+  return mermaidModule.default;
 };
 
 const COMMON_LANGUAGES: { value: string; label: string }[] = [
@@ -56,11 +59,12 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
   const language = normalizeLanguage(node.attrs.language || '');
   const isMermaid = language === 'mermaid';
   const code = node.textContent ?? '';
-  const renderIdRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
+  const reactId = useId();
+  const renderId = `mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, '')}`;
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
-  const mermaidRef = useRef<any | null>(null);
+  const mermaidRef = useRef<MermaidInstance | null>(null);
   const [mermaidReady, setMermaidReady] = useState(false);
 
   const [hovered, setHovered] = useState(false);
@@ -104,17 +108,17 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
     if (!isMermaid || !mermaidReady || !mermaidRef.current) return;
 
     const trimmed = code.trim();
-    if (trimmed.length === 0) {
-      setSvg(null);
-      setError(null);
-      return;
-    }
-
     let cancelled = false;
     const render = async () => {
+      if (trimmed.length === 0) {
+        setSvg(null);
+        setError(null);
+        return;
+      }
+
       setIsRendering(true);
       try {
-        const { svg: rendered } = await mermaidRef.current.render(renderIdRef.current, trimmed);
+        const { svg: rendered } = await mermaidRef.current!.render(renderId, trimmed);
         if (!cancelled) {
           setSvg(rendered);
           setError(null);
@@ -135,7 +139,7 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
     return () => {
       cancelled = true;
     };
-  }, [code, isMermaid, mermaidReady]);
+  }, [code, isMermaid, mermaidReady, renderId]);
 
   useEffect(() => {
     if (!langDropdownOpen) return;

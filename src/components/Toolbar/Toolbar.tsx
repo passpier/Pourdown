@@ -1,4 +1,6 @@
 import { Editor } from '@tiptap/react';
+
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -59,7 +61,7 @@ export function Toolbar({ editor }: ToolbarProps) {
           {[1, 2, 3, 4, 5, 6].map((level) => (
             <DropdownMenuItem
               key={level}
-              onClick={() => editor.chain().focus().toggleHeading({ level: level as any }).run()}
+              onClick={() => editor.chain().focus().toggleHeading({ level: level as HeadingLevel }).run()}
             >
               {t('toolbar.heading', { level })}
             </DropdownMenuItem>

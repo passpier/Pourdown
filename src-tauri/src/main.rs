@@ -849,10 +849,7 @@ fn normalize_open_path(arg: &str) -> Option<String> {
         Some(PathBuf::from(trimmed))
     };
 
-    let path = match path_str {
-        Some(p) => p,
-        None => return None,
-    };
+    let path = path_str?;
 
     if !path.is_file() {
         return None;
@@ -1165,7 +1162,7 @@ fn main() {
         .setup(|app| {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
             let paths = collect_open_paths(args);
-            queue_open_files(&app.handle(), paths);
+            queue_open_files(app.handle(), paths);
 
             // Prune stale import-media staging dirs from any previous run.
             // Documents aren't restored across restarts, so anything left
@@ -1234,7 +1231,7 @@ fn main() {
                     println!("❌ Failed to save language preference: {}", e);
                 }
                 // Update menu directly
-                if let Ok(menu) = create_app_menu(&app, "en") {
+                if let Ok(menu) = create_app_menu(app, "en") {
                     let _ = app.set_menu(menu);
                 }
                 // Re-sync view_source_code checkmark with current source_mode state
@@ -1261,7 +1258,7 @@ fn main() {
                     println!("❌ Failed to save language preference: {}", e);
                 }
                 // Update menu directly
-                if let Ok(menu) = create_app_menu(&app, "zh") {
+                if let Ok(menu) = create_app_menu(app, "zh") {
                     let _ = app.set_menu(menu);
                 }
                 // Re-sync view_source_code checkmark with current source_mode state

@@ -15,6 +15,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import type { ThemeName } from '@/theme/types';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import { usePlatformInitialization } from '@/hooks/usePlatformInitialization';
 import { getPrimaryLanguageCode } from '@/i18n/languageUtils';
@@ -561,9 +562,8 @@ function App() {
             toggleEditorMode();
           }),
           listen<string>('menu-set-theme', (event) => {
-            const themeName = event.payload as any;
             const setCurrentTheme = useUIStore.getState().setCurrentTheme;
-            setCurrentTheme(themeName);
+            setCurrentTheme(event.payload as ThemeName);
           }),
           listen<string>('language-changed', (event) => {
             console.log('📢 Backend notified of language change:', event.payload);

@@ -127,7 +127,7 @@ fn contains_dot_leader(text: &str) -> bool {
 fn is_all_caps_heading(text: &str) -> bool {
     let char_count = text.chars().count();
     // Length guard: too short or too long to be a section heading
-    if char_count < 3 || char_count > 80 {
+    if !(3..=80).contains(&char_count) {
         return false;
     }
     // Dot-leader lines are TOC entries, not headings

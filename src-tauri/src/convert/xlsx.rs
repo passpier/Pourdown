@@ -24,7 +24,7 @@ fn is_date_header(header: &str) -> bool {
 
 /// Returns true if `f` looks like a plausible Excel date serial (1970–2099).
 fn looks_like_excel_date(f: f64) -> bool {
-    f.fract() == 0.0 && f >= 25_569.0 && f <= 73_050.0
+    f.fract() == 0.0 && (25_569.0..=73_050.0).contains(&f)
 }
 
 
@@ -57,8 +57,7 @@ pub fn cell_to_string(cell: &Data) -> String {
     };
     // Collapse cell-internal newlines; escape pipes so table structure is intact.
     s.replace("\r\n", " ")
-        .replace('\r', " ")
-        .replace('\n', " ")
+        .replace(['\r', '\n'], " ")
         .replace('|', "\\|")
 }
 
@@ -130,7 +129,7 @@ pub fn xlsx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Con
 
         let header_strs: Vec<String> = header_raw
             .iter()
-            .map(|c| cell_to_string(c))
+            .map(cell_to_string)
             .collect();
 
         output.push('|');
@@ -148,19 +147,14 @@ pub fn xlsx_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Con
 
         // --- Data rows: collect first, then merge continuation rows ---
         let mut all_rows: Vec<Vec<String>> = Vec::new();
-        let mut data_row_count = 0usize;
 
-        for row in rows_iter {
-            if data_row_count >= MAX_ROWS_PER_SHEET {
-                break;
-            }
+        for row in rows_iter.take(MAX_ROWS_PER_SHEET) {
             let cells: Vec<String> = row
                 .iter()
                 .enumerate()
                 .map(|(ci, c)| cell_to_string_ctx(c, *date_cols.get(ci).unwrap_or(&false)))
                 .collect();
             all_rows.push(cells);
-            data_row_count += 1;
         }
 
         // Merge continuation rows (Option A heuristic):
@@ -353,7 +347,7 @@ mod tests {
         use calamine::{ExcelDateTime, ExcelDateTimeType};
         let dt = ExcelDateTime::new(46078.0, ExcelDateTimeType::DateTime, false);
         // In a date column: DateTime → ISO date
-        assert_eq!(cell_to_string_ctx(&Data::DateTime(dt.clone()), true), "2026-02-25");
+        assert_eq!(cell_to_string_ctx(&Data::DateTime(dt), true), "2026-02-25");
         // Outside a date column: same conversion (Display is serial, but cell_to_string also converts now)
         assert_eq!(cell_to_string(&Data::DateTime(dt)), "2026-02-25");
     }

@@ -139,13 +139,13 @@ export function getLayoutRecommendation(
   content: ContentCharacteristics,
   baseHorizontalPadding: number = 16
 ): LayoutRecommendation {
-  let contentWidth = 1024; // max-w-4xl default
+  let contentWidth: number;
   let horizontalPadding = baseHorizontalPadding;
-  let verticalPadding = 24; // py-6
-  let lineHeight = 1.75;
-  let fontSize = 16;
-  let enableHorizontalScroll = false;
-  let columns = 1;
+  let verticalPadding: number;
+  let lineHeight: number;
+  let fontSize: number;
+  let enableHorizontalScroll: boolean;
+  const columns = 1;
 
   if (viewport.isMobile) {
     // Mobile: prioritize readability, maximize space

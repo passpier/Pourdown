@@ -63,6 +63,21 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      # Pourdown only ships macOS/Windows builds (see release.yml), but the
+      # `tauri` crate still pulls in GTK/WebKit bindings at compile time on
+      # Linux, so cargo test/clippy need these system libs even though this
+      # runner never produces a Linux artifact.
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libxdo-dev
+
       # No PDFium setup step needed: `test_pdf_to_markdown_fixture` in
       # src-tauri/src/convert/pdf.rs looks for the vendored macOS
       # framework at src-tauri/frameworks/pdfium.framework/pdfium and

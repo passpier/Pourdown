@@ -62,9 +62,11 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   // Keep refs in sync so the unmount-capture cleanup (registered once) always
   // sees the latest documentId/content without needing to re-run per edit.
   const documentIdRef = useRef(documentId);
-  documentIdRef.current = documentId;
   const contentRef = useRef(content);
-  contentRef.current = content;
+  useLayoutEffect(() => {
+    documentIdRef.current = documentId;
+    contentRef.current = content;
+  }, [documentId, content]);
 
   // Load the document's raw content into the textarea (layout effect so it
   // runs before the anchor-restore effect below, in the same commit).
@@ -324,21 +326,21 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
     setCurrentIndex(0);
-  }, []);
+  }, [setSearchTerm, setCurrentIndex]);
 
   const handleNext = useCallback(() => {
     if (matchCount === 0) return;
     const next = (currentIndex + 1) % matchCount;
     setCurrentIndex(next);
     scrollToMatch(next);
-  }, [currentIndex, matchCount, scrollToMatch]);
+  }, [currentIndex, matchCount, scrollToMatch, setCurrentIndex]);
 
   const handlePrev = useCallback(() => {
     if (matchCount === 0) return;
     const prev = (currentIndex - 1 + matchCount) % matchCount;
     setCurrentIndex(prev);
     scrollToMatch(prev);
-  }, [currentIndex, matchCount, scrollToMatch]);
+  }, [currentIndex, matchCount, scrollToMatch, setCurrentIndex]);
 
   const handleReplace = useCallback(() => {
     if (matchCount === 0 || !doc) return;
