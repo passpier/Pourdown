@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use super::inline_fmt::{apply_inline_fmt, escape_markdown};
 use super::media::MediaSink;
 use super::ConversionError;
 
@@ -321,8 +322,16 @@ fn extract_paragraphs(xml: &str, known_title: Option<&str>) -> (Option<String>, 
 }
 
 /// Extract text from a paragraph's runs with basic bold/italic Markdown formatting.
+///
+/// Runs are first collected into (text, bold, italic) segments, adjacent
+/// segments with identical formatting are merged, and only then wrapped in
+/// emphasis markers. Wrapping each run independently would produce artifacts
+/// like `**專案**` + `**範疇**` = `**專案****範疇**` (invalid/ambiguous
+/// CommonMark) whenever a formatting run happens to be split across two
+/// `<a:r>` elements. `apply_inline_fmt` additionally keeps leading/trailing
+/// whitespace outside the markers (`**Frontline **` is not a valid closer).
 fn extract_run_text_formatted(para: &str) -> String {
-    let mut result = String::new();
+    let mut segments: Vec<(String, bool, bool)> = Vec::new();
     for run_chunk in para.split("<a:r>").skip(1) {
         let run_end = run_chunk.find("</a:r>").unwrap_or(run_chunk.len());
         let run = &run_chunk[..run_end];
@@ -342,18 +351,30 @@ fn extract_run_text_formatted(para: &str) -> String {
         if let Some(t_start) = run.find("<a:t>") {
             let after = &run[t_start + 5..];
             if let Some(t_end) = after.find("</a:t>") {
-                let text = xml_decode(&after[..t_end]);
+                let text = escape_markdown(&xml_decode(&after[..t_end]));
                 if !text.is_empty() {
-                    let formatted = match (is_bold, is_italic) {
-                        (true, true) => format!("***{}***", text),
-                        (true, false) => format!("**{}**", text),
-                        (false, true) => format!("_{}_", text),
-                        (false, false) => text,
-                    };
-                    result.push_str(&formatted);
+                    segments.push((text, is_bold, is_italic));
                 }
             }
         }
+    }
+
+    // Merge adjacent segments with identical formatting to prevent `****` artifacts.
+    let mut merged: Vec<(String, bool, bool)> = Vec::new();
+    for seg in segments {
+        if let Some(last) = merged.last_mut() {
+            if last.1 == seg.1 && last.2 == seg.2 {
+                last.0.push_str(&seg.0);
+                continue;
+            }
+        }
+        merged.push(seg);
+    }
+
+    let mut result = String::new();
+    for (text, bold, italic) in merged {
+        // pptx runs don't carry strikethrough detection today, so pass false.
+        result.push_str(&apply_inline_fmt(&text, bold, italic, false));
     }
     result
 }
@@ -402,6 +423,41 @@ mod tests {
         let (first, body) = extract_paragraphs(xml, None);
         assert_eq!(first, Some("First".to_string()));
         assert_eq!(body, "- Second");
+    }
+
+    #[test]
+    fn test_extract_run_text_formatted_merges_adjacent_bold_runs() {
+        // Regression test: a single bold phrase split across two <a:r> runs
+        // (e.g. PowerPoint spell-check re-splitting a run) must not produce
+        // `**a****b**` — adjacent same-format segments are merged first.
+        let para = concat!(
+            r#"<a:r><a:rPr b="1"/><a:t>專案</a:t></a:r>"#,
+            r#"<a:r><a:rPr b="1"/><a:t>範疇</a:t></a:r>"#,
+        );
+        assert_eq!(extract_run_text_formatted(para), "**專案範疇**");
+    }
+
+    #[test]
+    fn test_extract_run_text_formatted_trailing_space_outside_markers() {
+        // `**Frontline **` is not valid CommonMark (closer can't be preceded
+        // by whitespace); the trailing space must move outside the markers.
+        let para = concat!(
+            r#"<a:r><a:rPr b="1"/><a:t>Frontline </a:t></a:r>"#,
+            r#"<a:r><a:t>能提供</a:t></a:r>"#,
+        );
+        assert_eq!(extract_run_text_formatted(para), "**Frontline** 能提供");
+    }
+
+    #[test]
+    fn test_extract_run_text_formatted_escapes_literal_markdown_chars() {
+        let para = r#"<a:r><a:t>* not a bullet</a:t></a:r>"#;
+        assert_eq!(extract_run_text_formatted(para), "\\* not a bullet");
+    }
+
+    #[test]
+    fn test_extract_run_text_formatted_italic() {
+        let para = r#"<a:r><a:rPr i="1"/><a:t>hi</a:t></a:r>"#;
+        assert_eq!(extract_run_text_formatted(para), "*hi*");
     }
 
     /// End-to-end regression test against `tests/fixtures/sample.pptx`

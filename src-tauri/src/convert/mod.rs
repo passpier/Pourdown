@@ -6,6 +6,7 @@ pub mod pdf;
 pub mod pptx;
 pub mod html;
 pub mod media;
+mod inline_fmt;
 
 #[derive(Debug)]
 pub struct ConversionError(pub String);

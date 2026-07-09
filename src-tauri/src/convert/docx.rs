@@ -7,6 +7,7 @@ use docx_rs::{
     TableCellContent, TableChild, TableRowChild,
 };
 
+use super::inline_fmt::{apply_inline_fmt, escape_markdown};
 use super::media::MediaSink;
 use super::ConversionError;
 
@@ -384,23 +385,6 @@ fn run_raw_text(run: &Run) -> String {
     text
 }
 
-/// Escape literal Markdown inline-emphasis/code characters that appear in raw
-/// Word text, so author-typed `*`, `_`, backticks aren't reinterpreted as
-/// Markdown (e.g. a leading `*` becoming a bullet). Backslash is escaped first.
-/// Block-level leading markers (- + # >) are intentionally NOT escaped (a
-/// deliberate, narrower scope) to avoid mangling common text like dates
-/// ("2024-07-26") and "Item #5".
-fn escape_markdown(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if matches!(ch, '\\' | '*' | '_' | '`') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 /// Return a single (text, bold, italic, strike) segment for a run, or None if empty.
 fn run_to_segment(run: &Run, force_bold: bool) -> Option<(String, bool, bool, bool)> {
     let text = run_raw_text(run);
@@ -412,37 +396,6 @@ fn run_to_segment(run: &Run, force_bold: bool) -> Option<(String, bool, bool, bo
     let strike = run.run_property.strike.as_ref().map(|s| s.val).unwrap_or(false)
         || run.run_property.dstrike.as_ref().map(|d| d.val).unwrap_or(false);
     Some((text, bold, italic, strike))
-}
-
-/// Apply bold/italic/strikethrough markers, skipping whitespace-only text.
-///
-/// CommonMark requires an emphasis opener/closer to hug its text — `**`
-/// immediately followed by whitespace is not a valid opener, so a run like
-/// `"  Title"` wrapped naively as `"**  Title**"` renders as literal
-/// asterisks. Leading/trailing whitespace is moved outside the markers so
-/// emphasis stays valid while inter-run spacing (e.g. between adjacent runs
-/// in the same paragraph) is preserved.
-fn apply_inline_fmt(text: &str, bold: bool, italic: bool, strike: bool) -> String {
-    if text.trim().is_empty() || (!bold && !italic && !strike) {
-        return text.to_string();
-    }
-    let trimmed_start = text.trim_start();
-    let leading = &text[..text.len() - trimmed_start.len()];
-    let core = trimmed_start.trim_end();
-    let trailing = &trimmed_start[core.len()..];
-
-    let s = if strike {
-        format!("~~{}~~", core)
-    } else {
-        core.to_string()
-    };
-    let wrapped = match (bold, italic) {
-        (true, true) => format!("***{}***", s),
-        (true, false) => format!("**{}**", s),
-        (false, true) => format!("*{}*", s),
-        (false, false) => s,
-    };
-    format!("{}{}{}", leading, wrapped, trailing)
 }
 
 fn run_to_markdown(run: &Run, docx_media: &DocxMedia, media: &mut MediaSink) -> String {
@@ -611,34 +564,10 @@ mod tests {
         assert_eq!(result, "   ");
     }
 
-    #[test]
-    fn test_apply_inline_fmt_moves_leading_whitespace_outside_markers() {
-        // `**  Foo**` is not valid CommonMark bold (opener can't be followed by
-        // whitespace); the space must move outside the markers.
-        assert_eq!(
-            apply_inline_fmt("  Foo (FSD)", true, false, false),
-            "  **Foo (FSD)**"
-        );
-        assert_eq!(
-            apply_inline_fmt(" Version : 1.0", true, false, false),
-            " **Version : 1.0**"
-        );
-    }
-
-    #[test]
-    fn test_apply_inline_fmt_moves_trailing_whitespace_outside_markers() {
-        assert_eq!(apply_inline_fmt("bold ", true, false, false), "**bold** ");
-    }
-
-    #[test]
-    fn test_escape_markdown_literal_asterisk() {
-        // A literal `*` at the start of list item text (e.g. Word's own
-        // "* means mandatory field" convention) must not be read as a bullet.
-        assert_eq!(escape_markdown("* means mandatory"), "\\* means mandatory");
-        assert_eq!(escape_markdown("a_b*c`d"), "a\\_b\\*c\\`d");
-        assert_eq!(escape_markdown("hello world"), "hello world");
-    }
-
+    // Coverage for `apply_inline_fmt` and `escape_markdown` themselves now
+    // lives in `inline_fmt::tests`, since both docx and pptx share those
+    // helpers. The test below exercises them through docx's `run_to_markdown`
+    // integration, which is still docx-specific.
     #[test]
     fn test_run_to_markdown_bold_with_leading_whitespace_and_literal_asterisk() {
         let run = Run::new().add_text("  * means mandatory").bold();
