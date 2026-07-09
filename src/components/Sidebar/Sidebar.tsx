@@ -1,22 +1,18 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
-  ChevronDown,
-  ChevronRight,
   FilePlus,
+  FileText,
   FolderOpen,
-  Home,
   Search,
 } from 'lucide-react';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useRecentFiles } from '@/hooks/useRecentFiles';
-import { FileItem } from './FileItem';
+import { FileTree } from './FileTree';
 import { SearchPanel } from '@/components/Search/SearchPanel';
 import { OutlinePanel } from '@/components/Outline/OutlinePanel';
 
@@ -29,9 +25,6 @@ interface FileEntry {
 export const Sidebar = memo(function Sidebar() {
   const { t } = useTranslation();
   const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [filesCollapsed, setFilesCollapsed] = useState(false);
   const { recentFiles, refresh: refreshRecent } = useRecentFiles();
 
   const loadDocument = useDocumentStore((state) => state.loadDocument);
@@ -65,30 +58,6 @@ export const Sidebar = memo(function Sidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSearchQuery]);
 
-  const currentWorkspaceName = useMemo(() => {
-    if (!currentDirectory) return t('sidebar.workspace_empty');
-    return currentDirectory.split('/').pop() ?? currentDirectory;
-  }, [currentDirectory, t]);
-
-  const loadDirectory = async (path: string) => {
-    setLoading(true);
-    try {
-      const entries = await invoke<FileEntry[]>('list_directory', { path });
-      const filtered = entries.filter(
-        (entry) =>
-          entry.is_directory ||
-          entry.name.endsWith('.md') ||
-          entry.name.endsWith('.markdown'),
-      );
-      setFiles(filtered);
-      setCurrentDirectory(path);
-    } catch (error) {
-      console.error('Failed to load directory:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleOpenFolder = async () => {
     try {
       const selected = await open({
@@ -97,7 +66,7 @@ export const Sidebar = memo(function Sidebar() {
       });
 
       if (selected && typeof selected === 'string') {
-        await loadDirectory(selected);
+        setCurrentDirectory(selected);
       }
     } catch (error) {
       console.error('Failed to open folder:', error);
@@ -105,10 +74,7 @@ export const Sidebar = memo(function Sidebar() {
   };
 
   const handleFileClick = async (file: FileEntry) => {
-    if (file.is_directory) {
-      await loadDirectory(file.path);
-      return;
-    }
+    if (file.is_directory) return;
 
     if (file.name.endsWith('.md') || file.name.endsWith('.markdown')) {
       try {
@@ -133,67 +99,11 @@ export const Sidebar = memo(function Sidebar() {
     createNewDocument();
   };
 
-  const goToParentDirectory = () => {
-    if (!currentDirectory) return;
-    const parentPath = currentDirectory.split('/').slice(0, -1).join('/');
-    if (parentPath) {
-      void loadDirectory(parentPath);
-    }
-  };
-
   return (
-    <div className="sidebar-shell">
-      <section className="sidebar-card">
-        <div className="sidebar-card-header">
-          <button
-            type="button"
-            onClick={goToParentDirectory}
-            disabled={!currentDirectory}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-            title={currentDirectory ?? t('sidebar.workspace_empty')}
-          >
-            <span className="max-w-[9.5rem] truncate">{currentWorkspaceName}</span>
-            <ChevronDown className="h-3 w-3" />
-          </button>
-          <span className="text-[10px] text-muted-foreground">⌘⇧F</span>
-        </div>
-
-        <div className="sidebar-card-content space-y-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={sidebarQuery}
-              onChange={(event) => setSidebarQuery(event.target.value)}
-              placeholder={t('search.placeholder')}
-              className="h-8 w-full rounded-md border border-input bg-background pl-7 pr-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleOpenFolder}
-              className="h-8 flex-1 rounded-lg border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))] text-xs hover:bg-[hsl(var(--sidebar-surface-strong))]"
-            >
-              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-              {t('sidebar.open_folder')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleNewFile}
-              title={t('sidebar.new_file')}
-              className="h-8 rounded-lg border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))] px-2 hover:bg-[hsl(var(--sidebar-surface-strong))]"
-            >
-              <FilePlus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
-      </section>
-
-      <div className="mt-3 flex gap-1 rounded-lg bg-[hsl(var(--sidebar-surface))] p-1">
+    <div className="sidebar-shell flex h-full flex-col min-h-0">
+      {/* Segmented tabs — fixed at the top, above either panel, so Files-only
+          chrome (search/Open Folder/New File) never bleeds into Outline. */}
+      <div className="flex flex-shrink-0 gap-1 rounded-lg bg-[hsl(var(--sidebar-surface))] p-1">
         <button
           type="button"
           onClick={() => setSidebarTab('files')}
@@ -220,9 +130,47 @@ export const Sidebar = memo(function Sidebar() {
         </button>
       </div>
 
-      <ScrollArea className="mt-3 flex-1">
-        {sidebarTab === 'files' ? (
-          <>
+      {sidebarTab === 'files' ? (
+        <div className="mt-3 flex min-h-0 flex-1 flex-col">
+          {/* Fixed header: search box + Open Folder / New File */}
+          <div className="flex-shrink-0 space-y-2 pb-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={sidebarQuery}
+                onChange={(event) => setSidebarQuery(event.target.value)}
+                placeholder={t('search.placeholder')}
+                className="h-8 w-full rounded-md border border-input bg-background pl-7 pr-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleOpenFolder}
+                className="h-8 flex-1 rounded-lg border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))] text-xs hover:bg-[hsl(var(--sidebar-surface-strong))]"
+              >
+                <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                {t('sidebar.open_folder')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleNewFile}
+                title={t('sidebar.new_file')}
+                className="h-8 rounded-lg border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-surface))] px-2 hover:bg-[hsl(var(--sidebar-surface-strong))]"
+              >
+                <FilePlus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="h-px flex-shrink-0 bg-[hsl(var(--sidebar-border))]" />
+
+          {/* Independently scrolling body */}
+          <div className="min-h-0 flex-1 overflow-y-auto pt-3">
             {recentFiles.length > 0 && (
               <section className="sidebar-card">
                 <div className="sidebar-card-header">
@@ -248,58 +196,21 @@ export const Sidebar = memo(function Sidebar() {
 
             <section className="sidebar-card mt-3">
               <div className="sidebar-card-header">
-                <button
-                  type="button"
-                  onClick={() => setFilesCollapsed((v) => !v)}
-                  className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-semibold text-foreground/80 transition-colors hover:bg-accent"
-                >
-                  {filesCollapsed ? (
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  ) : (
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  )}
-                  {t('sidebar.files')}
-                </button>
-                {currentDirectory && (
-                  <button
-                    type="button"
-                    onClick={goToParentDirectory}
-                    className="sidebar-icon-button"
-                    title={t('sidebar.parent_directory')}
-                  >
-                    <Home className="h-3.5 w-3.5" />
-                  </button>
+                <span className="sidebar-section-title">{t('sidebar.files')}</span>
+              </div>
+              <div className="sidebar-card-content">
+                {currentDirectory ? (
+                  <FileTree
+                    rootDir={currentDirectory}
+                    activePath={activeDocument?.path ?? null}
+                    onOpenFile={(file) => void handleFileClick(file)}
+                  />
+                ) : (
+                  <div className="px-2 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                    {t('sidebar.open_folder_to_browse')}
+                  </div>
                 )}
               </div>
-
-              {!filesCollapsed && (
-                <div className="sidebar-card-content">
-                  {loading ? (
-                    <div className="px-2 py-3 text-xs text-muted-foreground">{t('common.loading')}</div>
-                  ) : currentDirectory ? (
-                    files.length > 0 ? (
-                      <div className="space-y-1 px-1 pb-1">
-                        {files.map((file) => (
-                          <FileItem
-                            key={file.path}
-                            file={file}
-                            onClick={() => void handleFileClick(file)}
-                            isActive={activeDocument?.path === file.path}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="px-2 py-3 text-xs text-muted-foreground">
-                        {t('sidebar.no_files_found')}
-                      </div>
-                    )
-                  ) : (
-                    <div className="px-2 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                      {t('sidebar.open_folder_to_browse')}
-                    </div>
-                  )}
-                </div>
-              )}
             </section>
 
             {hasSearchQuery && (
@@ -308,11 +219,26 @@ export const Sidebar = memo(function Sidebar() {
                 query={sidebarQuery}
               />
             )}
-          </>
-        ) : (
-          <OutlinePanel content={activeDocument?.content ?? ''} />
-        )}
-      </ScrollArea>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex min-h-0 flex-1 flex-col">
+          {/* Fixed header: active document name */}
+          <div className="flex flex-shrink-0 items-center gap-2 pb-3">
+            <FileText className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+            <span className="truncate text-xs text-muted-foreground">
+              {activeDocument?.path?.split('/').pop() ?? t('common.untitled')}
+            </span>
+          </div>
+
+          <div className="h-px flex-shrink-0 bg-[hsl(var(--sidebar-border))]" />
+
+          {/* Independently scrolling body */}
+          <div className="min-h-0 flex-1 overflow-y-auto pt-3">
+            <OutlinePanel content={activeDocument?.content ?? ''} />
+          </div>
+        </div>
+      )}
     </div>
   );
 });
