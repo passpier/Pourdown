@@ -197,13 +197,15 @@
 }
 
 .tiptap h1 {
-  @apply text-4xl font-bold mb-4 mt-8;
+  @apply text-4xl font-bold mb-4 mt-8 pb-2;
   color: hsl(var(--text-heading));
+  border-bottom: 1px solid hsl(var(--border-color));
 }
 
 .tiptap h2 {
-  @apply text-3xl font-bold mb-3 mt-6;
+  @apply text-3xl font-bold mb-3 mt-6 pb-2;
   color: hsl(var(--text-heading));
+  border-bottom: 1px solid hsl(var(--border-color));
 }
 
 .tiptap h3 {

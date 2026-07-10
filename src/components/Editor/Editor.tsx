@@ -11,6 +11,9 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
+import Link from '@tiptap/extension-link';
+import TaskList from '@tiptap/extension-task-list';
+import TaskItem from '@tiptap/extension-task-item';
 import { createLowlight, common } from 'lowlight';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -147,6 +150,15 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
         html: true,
         transformPastedText: true,
         transformCopiedText: true,
+        // Match Typora/GFM: a single newline within a paragraph renders as a
+        // visible line break rather than being collapsed into the same line.
+        // Round-trip note: this makes soft breaks serialize back out as a
+        // trailing backslash + newline (tiptap-markdown's hardBreak
+        // serializer) — a deliberate, accepted normalization.
+        breaks: true,
+        // Auto-detect bare URLs (e.g. `http://www.example.com`) as links at
+        // parse time, matching GFM/Typora behavior.
+        linkify: true,
       }),
       Typography,
       CustomImage,
@@ -160,6 +172,19 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       TableRow,
       TableHeader,
       TableCell,
+      // openOnClick disabled: a click inside the Tauri webview would navigate
+      // the app window itself away from the editor rather than opening an
+      // external browser. Revisit if/when links open via the OS browser
+      // (e.g. through @tauri-apps/plugin-shell).
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        linkOnPaste: true,
+      }),
+      TaskList,
+      TaskItem.configure({
+        nested: true,
+      }),
       SearchExtension,
     ],
     content: document?.content || '',
