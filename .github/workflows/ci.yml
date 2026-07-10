@@ -78,6 +78,17 @@ jobs:
             libssl-dev \
             libxdo-dev
 
+      # tauri::generate_context!() (invoked from main.rs, compiled for every
+      # cargo target including tests) resolves `frontendDist` ("../dist" in
+      # tauri.conf.json) at compile time and panics if the directory doesn't
+      # exist. This job never runs `pnpm build` (no Node/pnpm install here,
+      # by design — the frontend has its own lint job), so `dist/` is
+      # missing on a fresh checkout. A stub directory satisfies the macro;
+      # its contents are irrelevant since nothing in this job actually
+      # launches the webview.
+      - name: Stub frontendDist for tauri::generate_context!
+        run: mkdir -p dist && echo '<html></html>' > dist/index.html
+
       # No PDFium setup step needed: `test_pdf_to_markdown_fixture` in
       # src-tauri/src/convert/pdf.rs looks for the vendored macOS
       # framework at src-tauri/frameworks/pdfium.framework/pdfium and
