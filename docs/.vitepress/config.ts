@@ -11,6 +11,16 @@ export default defineConfig({
   head: [
     ["link", { rel: "icon", type: "image/png", href: "/Pourdown/favicon.png" }],
     ["link", { rel: "apple-touch-icon", href: "/Pourdown/favicon.png" }],
+    [
+      "link",
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: "/Pourdown/fonts/space-grotesk-latin-700.woff2",
+        crossorigin: "",
+      },
+    ],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:image", content: ogImage }],
     ["meta", { property: "og:site_name", content: "Pourdown" }],

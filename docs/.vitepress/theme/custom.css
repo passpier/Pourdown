@@ -1,14 +1,106 @@
 /*
- * Custom home-page styling, ported from the original hand-written
- * docs/index.html landing page. Colors are expressed via VitePress's
- * theme CSS variables (--vp-c-*) instead of the original's hardcoded
- * hex values, so the same hero/table/grid layout looks correct in both
- * light and dark mode (VitePress's built-in theme toggle just works).
+ * Custom home-page styling for the Pourdown landing page.
+ *
+ * Ported from a design mockup (an "IMPORT LLM prep tool" positioning —
+ * see ../../../POSITIONING.md) into VitePress-native markup: the mockup's
+ * own <header>/<nav>/<footer> and JS theme/lang toggles are intentionally
+ * NOT used — VitePress already supplies nav, footer, theme toggle, i18n,
+ * and search, and duplicating those would fight the site chrome (the
+ * original readability complaint).
+ *
+ * Palette:
+ *  - --pd-* custom properties carry the mockup's cream/paper (light) and
+ *    GitHub-dark-like (dark) palette, scoped to `.pourdown-home` (the
+ *    home page only) so guide pages keep their standard readable surface.
+ *  - --vp-c-brand-* is remapped to the same teal-green brand *globally*
+ *    (nav, links, guide pages) so the accent color is consistent site-wide
+ *    even though the paper background is home-only.
+ *  - Dark mode hooks off VitePress's `.dark` class on <html>, not a
+ *    separate data-theme attribute, so it stays in sync with the
+ *    built-in theme toggle.
+ *
+ * Font: Space Grotesk is self-hosted (docs/public/fonts, OFL-1.1) for
+ * display headings only, with a system-ui fallback stack, so there is no
+ * external font origin and no render-blocking request.
  */
 
+/* ── Self-hosted display font ── */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/Pourdown/fonts/space-grotesk-latin-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/Pourdown/fonts/space-grotesk-latin-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/Pourdown/fonts/space-grotesk-latin-700.woff2") format("woff2");
+}
+
+/* ── Palette (home page only) ── */
+:root {
+  --pd-bg: #fbf8ef;
+  --pd-bg-alt: #f3eedf;
+  --pd-surface: #ffffff;
+  --pd-text: #1b1a17;
+  --pd-muted: #6c685f;
+  --pd-border: #e7dfcb;
+  --pd-code-bg: #f1ebda;
+  --pd-brand: #0ca678;
+  --pd-brand-2: #12b5b0;
+  --pd-brand-strong: #0b8f68;
+  --pd-shadow: 0 1px 2px rgba(30, 25, 10, 0.05), 0 12px 40px -12px rgba(30, 25, 10, 0.14);
+  --pd-shadow-lg: 0 2px 4px rgba(30, 25, 10, 0.06), 0 40px 80px -24px rgba(20, 90, 70, 0.28);
+
+  /* Global brand remap — teal everywhere, not just the home page */
+  --vp-c-brand-1: var(--pd-brand-strong);
+  --vp-c-brand-2: var(--pd-brand);
+  --vp-c-brand-3: var(--pd-brand-2);
+  --vp-c-brand-soft: rgba(12, 166, 120, 0.14);
+}
+.dark {
+  --pd-bg: #0d1117;
+  --pd-bg-alt: #11161e;
+  --pd-surface: #161c25;
+  --pd-text: #e7edf3;
+  --pd-muted: #97a0ac;
+  --pd-border: #29313d;
+  --pd-code-bg: #1a212b;
+  --pd-brand: #2dd4bf;
+  --pd-brand-2: #34d399;
+  --pd-brand-strong: #5eead4;
+  --pd-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 44px -14px rgba(0, 0, 0, 0.6);
+  --pd-shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.4), 0 44px 90px -26px rgba(0, 0, 0, 0.7);
+
+  --vp-c-brand-1: var(--pd-brand-strong);
+  --vp-c-brand-2: var(--pd-brand);
+  --vp-c-brand-3: var(--pd-brand-2);
+  --vp-c-brand-soft: rgba(45, 212, 191, 0.16);
+}
+@supports (color: color-mix(in oklch, #000, #000)) {
+  :root {
+    --vp-c-brand-soft: color-mix(in oklch, var(--pd-brand) 14%, transparent);
+  }
+  .dark {
+    --vp-c-brand-soft: color-mix(in oklch, var(--pd-brand) 16%, transparent);
+  }
+}
+
 .pourdown-home {
-  --pd-radius: 8px;
-  --pd-max-w: 960px;
+  --pd-radius: 14px;
+  --pd-max-w: 1120px;
+  background: var(--pd-bg);
+  color: var(--pd-text);
 }
 
 .pourdown-home .pd-container {
@@ -17,184 +109,398 @@
   padding: 0 24px;
 }
 
+.pourdown-home h1,
+.pourdown-home h2,
+.pourdown-home h3,
+.pourdown-home .pd-font-display {
+  font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  letter-spacing: -0.02em;
+}
+
 /* ── Hero ── */
 .pourdown-home .pd-hero {
-  padding: 64px 0 48px;
+  position: relative;
+  padding: 68px 0 40px;
   text-align: center;
-  background: linear-gradient(180deg, var(--vp-c-bg-alt) 0%, var(--vp-c-bg) 100%);
-  border-bottom: 1px solid var(--vp-c-divider);
+  overflow: hidden;
+}
+.pourdown-home .pd-hero-glow {
+  position: absolute;
+  top: -60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 560px;
+  height: 320px;
+  max-width: 100%;
+  background: radial-gradient(ellipse at center, rgba(12, 166, 120, 0.22), transparent 70%);
+  filter: blur(20px);
+  pointer-events: none;
+  z-index: 0;
+}
+.pourdown-home .pd-hero-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 700px;
+  margin: 0 auto;
+}
+.pourdown-home .pd-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  color: var(--pd-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 22px;
 }
 .pourdown-home .pd-hero h1 {
-  font-size: clamp(2rem, 5vw, 3rem);
-  font-weight: 800;
-  letter-spacing: -0.5px;
-  margin-bottom: 16px;
-  line-height: 1.15;
+  font-weight: 700;
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  line-height: 1.08;
+  margin: 0 0 22px;
   border-top: none;
   padding-top: 0;
 }
+.pourdown-home .pd-hero-accent {
+  background: linear-gradient(100deg, var(--pd-brand-2), var(--pd-brand));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 .pourdown-home .pd-hero .pd-tagline {
-  font-size: 1.2rem;
-  color: var(--vp-c-text-2);
+  font-size: clamp(1.05rem, 2vw, 1.25rem);
+  line-height: 1.55;
+  color: var(--pd-muted);
   max-width: 600px;
   margin: 0 auto 32px;
 }
-.pourdown-home .pd-cta-row {
+.pourdown-home .pd-trust {
+  margin: 20px 0 0;
+  font-size: 13.5px;
+  color: var(--pd-muted);
+}
+
+/* ── Download buttons ── */
+.pourdown-home .pd-dl-row {
   display: flex;
   gap: 12px;
   justify-content: center;
   flex-wrap: wrap;
 }
-.pourdown-home .pd-btn {
+.pourdown-home .pd-dl-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  border-radius: var(--pd-radius);
-  font-size: 0.95rem;
+  gap: 11px;
+  padding: 13px 22px;
+  border-radius: 12px;
   font-weight: 600;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: opacity 0.15s;
+  font-size: 15.5px;
+  border: 1px solid var(--pd-border);
+  box-shadow: var(--pd-shadow);
+  background: var(--pd-surface);
+  color: var(--pd-text);
   text-decoration: none !important;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
-.pourdown-home .pd-btn:hover {
-  opacity: 0.85;
+.pourdown-home .pd-dl-btn:hover {
+  transform: translateY(-2px);
+  border-color: var(--pd-brand);
 }
-.pourdown-home .pd-btn-primary {
-  background: var(--vp-c-brand-1);
+.pourdown-home .pd-dl-btn-primary {
+  background: linear-gradient(135deg, var(--pd-brand-2), var(--pd-brand));
   color: #fff;
+  border-color: transparent;
 }
-.pourdown-home .pd-btn-secondary {
-  background: var(--vp-c-bg);
-  color: var(--vp-c-text-1);
-  border-color: var(--vp-c-divider);
+.pourdown-home .pd-dl-btn-primary:hover {
+  box-shadow: var(--pd-shadow-lg);
 }
-
-/* ── Screenshot ── */
-.pourdown-home .pd-screenshot {
-  padding: 48px 0;
-  text-align: center;
+.pourdown-home .pd-dl-icon {
+  flex: none;
+  display: block;
 }
-.pourdown-home .pd-screenshot img {
-  width: 100%;
-  max-width: 860px;
-  height: auto;
-  border-radius: 10px;
-  border: 1px solid var(--vp-c-divider);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
-}
-
-/* ── Section ── */
-.pourdown-home .pd-section {
-  padding: 48px 0;
-}
-.pourdown-home .pd-section-title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-.pourdown-home .pd-section-sub {
-  color: var(--vp-c-text-2);
-  margin-bottom: 28px;
-}
-
-/* ── Conversion table ── */
-.pourdown-home table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: var(--pd-radius);
-  overflow: hidden;
-  display: table;
-}
-.pourdown-home th {
-  background: var(--vp-c-bg-alt);
-  font-weight: 600;
+.pourdown-home .pd-dl-text {
+  display: flex;
+  flex-direction: column;
   text-align: left;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--vp-c-divider);
+  line-height: 1.15;
 }
-.pourdown-home td {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--vp-c-divider);
-  vertical-align: top;
+.pourdown-home .pd-dl-sub {
+  font-size: 11.5px;
+  font-weight: 400;
+  opacity: 0.82;
 }
-.pourdown-home tr:last-child td {
-  border-bottom: none;
-}
-.pourdown-home .pd-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--vp-c-brand-soft);
-  color: var(--vp-c-brand-1);
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
+.pourdown-home .pd-dl-btn:not(.pd-dl-btn-primary) .pd-dl-sub {
+  color: var(--pd-muted);
+  opacity: 1;
 }
 
-/* ── Features grid ── */
-.pourdown-home .pd-features {
-  padding: 48px 0;
-  background: var(--vp-c-bg-alt);
-  border-top: 1px solid var(--vp-c-divider);
-  border-bottom: 1px solid var(--vp-c-divider);
+/* ── Demo frame ── */
+.pourdown-home .pd-demo-wrap {
+  position: relative;
+  z-index: 1;
+  margin: 52px auto 0;
+  max-width: 940px;
 }
-.pourdown-home .pd-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 24px;
-  margin-top: 28px;
+.pourdown-home .pd-demo-frame {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--pd-border);
+  background: var(--pd-surface);
+  box-shadow: var(--pd-shadow-lg);
 }
-.pourdown-home .pd-card {
-  background: var(--vp-c-bg);
-  border: 1px solid var(--vp-c-divider);
-  border-radius: var(--pd-radius);
-  padding: 20px;
+.pourdown-home .pd-demo-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--pd-border);
+  background: var(--pd-bg-alt);
 }
-.pourdown-home .pd-card-icon {
-  font-size: 1.5rem;
-  margin-bottom: 10px;
+.pourdown-home .pd-demo-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  display: inline-block;
 }
-.pourdown-home .pd-card h3 {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin-bottom: 6px;
-  margin-top: 0;
+.pourdown-home .pd-demo-dot.red { background: #ff5f57; }
+.pourdown-home .pd-demo-dot.yellow { background: #febc2e; }
+.pourdown-home .pd-demo-dot.green { background: #28c840; }
+.pourdown-home .pd-demo-title {
+  margin-left: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--pd-muted);
+}
+.pourdown-home .pd-demo-placeholder {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: var(--pd-code-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pd-muted);
+  font-size: 13.5px;
+  text-align: center;
+  padding: 24px;
+}
+.pourdown-home .pd-demo-caption {
+  text-align: center;
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  color: var(--pd-muted);
+}
+
+/* ── Section shell ── */
+.pourdown-home .pd-section {
+  padding: 76px 0;
+}
+.pourdown-home .pd-section-alt {
+  background: var(--pd-bg-alt);
+  border-top: 1px solid var(--pd-border);
+  border-bottom: 1px solid var(--pd-border);
+}
+.pourdown-home .pd-section-head {
+  text-align: center;
+  max-width: 640px;
+  margin: 0 auto 48px;
+}
+.pourdown-home .pd-section-head h2 {
+  font-weight: 700;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  margin: 0 0 14px;
   border-top: none;
   padding-top: 0;
 }
-.pourdown-home .pd-card p {
-  font-size: 0.85rem;
-  color: var(--vp-c-text-2);
+.pourdown-home .pd-section-sub {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--pd-muted);
   margin: 0;
 }
 
-/* ── Tech stack pills ── */
-.pourdown-home .pd-tech {
-  padding: 40px 0;
+/* ── Format cards ── */
+.pourdown-home .pd-format-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+.pourdown-home .pd-format-card {
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius);
+  padding: 24px;
+  box-shadow: var(--pd-shadow);
+}
+.pourdown-home .pd-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 9px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+.pourdown-home .pd-chip-docx { color: #2b6fd6; background: rgba(43, 111, 214, 0.12); }
+.pourdown-home .pd-chip-xlsx { color: #1f9d55; background: rgba(31, 157, 85, 0.14); }
+.pourdown-home .pd-chip-pdf { color: #d1483f; background: rgba(209, 72, 63, 0.12); }
+.pourdown-home .pd-chip-pptx { color: #d1741f; background: rgba(209, 116, 31, 0.13); }
+.pourdown-home .pd-format-card h3 {
+  font-weight: 600;
+  font-size: 18px;
+  margin: 0 0 8px;
+  border-top: none;
+  padding-top: 0;
+}
+.pourdown-home .pd-format-card p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--pd-muted);
+  margin: 0;
+}
+.pourdown-home .pd-format-foot {
+  text-align: center;
+  margin: 32px 0 0;
+  font-size: 14px;
+  color: var(--pd-muted);
+}
+
+/* ── LLM callout band ── */
+.pourdown-home .pd-llm-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--pd-brand-2), var(--pd-brand));
+  padding: 52px 40px;
+  text-align: center;
+  box-shadow: var(--pd-shadow-lg);
+  color: #fff;
+}
+.pourdown-home .pd-llm-inner {
+  max-width: 660px;
+  margin: 0 auto;
+}
+.pourdown-home .pd-llm-kicker {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin-bottom: 16px;
+}
+.pourdown-home .pd-llm-title {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: clamp(1.375rem, 3.4vw, 2rem);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  margin: 0 0 12px;
+}
+.pourdown-home .pd-llm-sub {
+  font-size: 15px;
+  line-height: 1.6;
+  opacity: 0.92;
+  margin: 0;
+}
+.pourdown-home .pd-llm-sub a {
+  color: #fff;
+  text-decoration: underline;
+}
+
+/* ── Feature cards ── */
+.pourdown-home .pd-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+.pourdown-home .pd-feature-card {
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius);
+  padding: 26px;
+}
+.pourdown-home .pd-feature-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: rgba(12, 166, 120, 0.14);
+  color: var(--pd-brand-strong);
+  margin-bottom: 18px;
+}
+.pourdown-home .pd-feature-card h3 {
+  font-weight: 600;
+  font-size: 17px;
+  margin: 0 0 8px;
+  border-top: none;
+  padding-top: 0;
+}
+.pourdown-home .pd-feature-card p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--pd-muted);
+  margin: 0;
+}
+
+/* ── Native section ── */
+.pourdown-home .pd-native {
+  max-width: 720px;
+  margin: 0 auto;
   text-align: center;
 }
-.pourdown-home .pd-pill-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-  margin-top: 20px;
+.pourdown-home .pd-native h2 {
+  font-weight: 700;
+  font-size: clamp(1.625rem, 3.6vw, 2.25rem);
+  margin: 0 0 16px;
+  border-top: none;
+  padding-top: 0;
 }
-.pourdown-home .pd-pill {
-  padding: 6px 14px;
-  border-radius: 20px;
-  background: var(--vp-c-bg-alt);
-  border: 1px solid var(--vp-c-divider);
-  font-size: 0.85rem;
-  font-weight: 500;
+.pourdown-home .pd-native p {
+  font-size: 16.5px;
+  line-height: 1.6;
+  color: var(--pd-muted);
+  margin: 0;
+}
+
+/* ── CTA band ── */
+.pourdown-home .pd-cta-band {
+  text-align: center;
+}
+.pourdown-home .pd-cta-band img {
+  border-radius: 14px;
+  margin-bottom: 22px;
+}
+.pourdown-home .pd-cta-band h2 {
+  font-weight: 700;
+  font-size: clamp(1.875rem, 4.6vw, 2.875rem);
+  margin: 0 0 16px;
+  border-top: none;
+  padding-top: 0;
+}
+.pourdown-home .pd-cta-band .pd-section-sub {
+  max-width: 500px;
+  margin: 0 auto 32px;
 }
 
 @media (max-width: 600px) {
   .pourdown-home .pd-hero {
-    padding: 40px 0 32px;
+    padding: 44px 0 32px;
+  }
+  .pourdown-home .pd-section {
+    padding: 52px 0;
+  }
+  .pourdown-home .pd-dl-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pourdown-home .pd-dl-btn {
+    justify-content: center;
   }
 }
