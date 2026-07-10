@@ -46,16 +46,25 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
   <div class="pd-container">
     <h2 class="pd-section-title">Import from any format</h2>
     <p class="pd-section-sub">
-      Pourdown converts your existing documents to Markdown before you edit —
-      preserving structure while cutting token cost by up to 96% vs raw PDF.
+      Pourdown converts Word, Excel, PDF, and PowerPoint files to Markdown
+      while <strong>keeping your images</strong> — something most Markdown
+      converters simply throw away. Structure comes along too: headings,
+      lists, tables, and links, not just plain text. (As a bonus, Markdown is
+      also up to 96% more token-efficient than raw PDF for feeding into LLMs —
+      <a href="/guide/importing">community benchmarks</a>.)
     </p>
 
-| Format | What's preserved | Known limitations |
-|---|---|---|
-| <span class="pd-badge">Word .docx</span> | Headings, bold/italic/strikethrough, nested lists, tables, hyperlinks, embedded images | Vector images (EMF/WMF) can't be displayed; tracked changes dropped; TOC placeholder inserted |
-| <span class="pd-badge">Excel .xlsx / .ods</span> | Each sheet → GFM table section; dates formatted as ISO; embedded images extracted | Capped at 500 rows per sheet; images can't be mapped to a specific cell |
-| <span class="pd-badge">PDF</span> | Headings inferred from font size; paragraphs sorted top-to-bottom; tables detected | Text-only PDFs; scanned/image PDFs not supported; complex multi-column layouts may reorder |
-| <span class="pd-badge">PowerPoint .pptx</span> | Slide titles → `#` headings; body text → paragraphs; embedded images extracted | Animations not captured; vector images (EMF/WMF) can't be displayed |
+| Format | What you get |
+|---|---|
+| <span class="pd-badge">Word .docx</span> | Headings, bold/italic/strikethrough, nested lists, tables, hyperlinks, and embedded images — preserved |
+| <span class="pd-badge">Excel .xlsx / .ods</span> | Each sheet as a clean table; dates auto-formatted; embedded images extracted |
+| <span class="pd-badge">PDF</span> | Headings and reading order inferred automatically; tables detected and rebuilt; embedded images extracted |
+| <span class="pd-badge">PowerPoint .pptx</span> | Slide titles become headings, body text becomes paragraphs, embedded images extracted |
+
+<p class="pd-section-sub" style="margin-top: 20px; margin-bottom: 0;">
+  See exactly what's preserved and today's known limitations in the
+  <a href="/guide/importing">Importing Documents guide</a>.
+</p>
 
   </div>
 </section>
@@ -91,8 +100,13 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
       </div>
       <div class="pd-card">
         <div class="pd-card-icon">🌐</div>
-        <h3>i18n</h3>
+        <h3>English &amp; 中文</h3>
         <p>English and Traditional Chinese interface out of the box.</p>
+      </div>
+      <div class="pd-card">
+        <div class="pd-card-icon">🔒</div>
+        <h3>Offline &amp; Private</h3>
+        <p>Every conversion runs on your machine — your documents never get uploaded anywhere.</p>
       </div>
     </div>
   </div>
@@ -100,17 +114,14 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
 
 <section class="pd-tech">
   <div class="pd-container">
-    <h2 class="pd-section-title">Built with</h2>
-    <div class="pd-pill-row">
-      <span class="pd-pill">Tauri v2</span>
-      <span class="pd-pill">React 18</span>
-      <span class="pd-pill">Rust</span>
-      <span class="pd-pill">TypeScript</span>
-      <span class="pd-pill">Tiptap v2</span>
-      <span class="pd-pill">Zustand</span>
-      <span class="pd-pill">Tailwind CSS</span>
-      <span class="pd-pill">Vite</span>
-    </div>
+    <h2 class="pd-section-title">Native &amp; lightweight</h2>
+    <p class="pd-section-sub">
+      Pourdown is built on <strong>Tauri v2</strong>, not Electron — it uses
+      your OS's built-in webview instead of bundling an entire browser, so the
+      download and memory footprint stay small. Import is native Rust, not a
+      Python script, so there's no separate runtime to install. Free and open
+      source under the MIT license.
+    </p>
   </div>
 </section>
 
