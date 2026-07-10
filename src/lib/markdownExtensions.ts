@@ -25,6 +25,7 @@ import {
   Abbreviation,
   Small,
 } from '@/extensions/rawHtml';
+import { MathInline, MathBlock } from '@/extensions/math';
 
 export interface MarkdownExtensionOverrides {
   /**
@@ -35,6 +36,15 @@ export interface MarkdownExtensionOverrides {
    * text rather than sanitized HTML in a real editor.
    */
   htmlBlock?: AnyExtension;
+  /**
+   * Swap in a React-node-view-backed `mathInline`/`mathBlock` extension (see
+   * `Editor.tsx`'s `MathInline.extend({ addNodeView() {...} })`), same
+   * pattern as `htmlBlock` above. Defaults to the plain nodes from
+   * `extensions/math.ts`, which render an inert fallback element in headless
+   * tests.
+   */
+  mathInline?: AnyExtension;
+  mathBlock?: AnyExtension;
 }
 
 /**
@@ -100,6 +110,8 @@ export function createMarkdownExtensions(overrides: MarkdownExtensionOverrides =
     FootnoteDefinition,
     FootnoteClickPlugin,
     overrides.htmlBlock ?? HtmlBlock,
+    overrides.mathInline ?? MathInline,
+    overrides.mathBlock ?? MathBlock,
     Kbd,
     Highlight,
     Subscript,

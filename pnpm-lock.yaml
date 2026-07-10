@@ -80,6 +80,9 @@ importers:
       i18next:
         specifier: ^25.8.5
         version: 25.8.5(typescript@5.9.3)
+      katex:
+        specifier: ^0.16.28
+        version: 0.16.28
       lowlight:
         specifier: ^3.1.0
         version: 3.3.0
@@ -126,6 +129,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2.0.0
         version: 2.9.6
+      '@types/katex':
+        specifier: ^0.16.8
+        version: 0.16.8
       '@types/react':
         specifier: ^18.2.43
         version: 18.3.27
@@ -1181,6 +1187,9 @@ packages:
 
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
+
+  '@types/katex@0.16.8':
+    resolution: {integrity: sha512-trgaNyfU+Xh2Tc+ABIb44a5AYUpicB3uwirOioeOkNPPbmgRNtcWyDeeFRzjPZENO9Vq8gvVqfhaaXWLlevVwg==}
 
   '@types/linkify-it@3.0.5':
     resolution: {integrity: sha512-yg6E+u0/+Zjva+buc3EIb+29XEg4wltq7cSmd4Uc2EE/1nUVmxyzpX6gUXD0V8jIrG0r7YeOGVIbYRkxeooCtw==}
@@ -3946,6 +3955,8 @@ snapshots:
       '@types/unist': 3.0.3
 
   '@types/json-schema@7.0.15': {}
+
+  '@types/katex@0.16.8': {}
 
   '@types/linkify-it@3.0.5': {}
 

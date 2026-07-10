@@ -168,6 +168,82 @@
   display: block;
 }
 
+/* Math (KaTeX) block/inline styling */
+.tiptap-codeblock-math,
+.math-block {
+  margin: 1rem 0;
+}
+
+.math-block-preview {
+  border: 1px solid hsl(var(--border-color));
+  background-color: hsl(var(--bg-secondary));
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  text-align: center;
+  cursor: text;
+}
+
+.math-katex {
+  display: inline-block;
+}
+
+.math-status {
+  color: hsl(var(--text-muted));
+  font-size: 0.875rem;
+}
+
+.math-error {
+  color: hsl(var(--text-error, 0 84% 60%));
+  background-color: hsl(var(--bg-code));
+  border: 1px solid hsl(var(--border-color));
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.math-block-source {
+  margin-top: 0.75rem;
+  display: none;
+}
+
+.math-block-source-open,
+.ProseMirror-selectednode .math-block-source {
+  display: block;
+}
+
+.math-inline {
+  display: inline-block;
+  cursor: text;
+  border-radius: 0.25rem;
+  padding: 0 0.125rem;
+}
+
+.math-inline:hover {
+  background-color: hsl(var(--bg-secondary));
+}
+
+.math-inline .math-error-inline {
+  font-size: 0.8125rem;
+  color: hsl(var(--text-error, 0 84% 60%));
+}
+
+.math-inline-editing {
+  display: inline-block;
+}
+
+.math-inline-input {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  border: 1px solid hsl(var(--border-color));
+  border-radius: 0.25rem;
+  padding: 0 0.25rem;
+  background-color: hsl(var(--bg-code));
+  color: inherit;
+  min-width: 4ch;
+}
+
 /* Code Lines (for line numbers) */
 .code-line {
   display: flex;

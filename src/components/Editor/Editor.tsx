@@ -15,9 +15,13 @@ import { injectFrontmatterAsCodeBlock, restoreFrontmatterFromCodeBlock, frontmat
 import { computeSegmentAnchor, resolveSegmentScrollTop, findAnchorHeading, type HeadingLandmark } from '@/lib/editorAnchor';
 import { createMarkdownExtensions } from '@/lib/markdownExtensions';
 import { HtmlBlock } from '@/extensions/rawHtml';
+import { MathInline, MathBlock } from '@/extensions/math';
 import '@/components/CodeBlockRenderer/CodeBlockRenderer.css';
+import 'katex/dist/katex.min.css';
 import { CodeBlockNodeView } from './CodeBlockNodeView';
 import { HtmlBlockNodeView } from './HtmlBlockNodeView';
+import { MathInlineNodeView } from './MathInlineNodeView';
+import { MathBlockNodeView } from './MathBlockNodeView';
 import { SearchExtension, type SearchStorage } from './searchExtension';
 import { FindBar } from './FindBar';
 import { TableHoverPanel } from './TableHoverPanel';
@@ -84,6 +88,25 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     });
   }, []);
 
+  // Same graft as HtmlBlockWithView above: the base nodes in
+  // `extensions/math.ts` stay React-free for headless round-trip tests, and
+  // the live editor swaps in the KaTeX-rendering node views here.
+  const MathInlineWithView = useMemo(() => {
+    return MathInline.extend({
+      addNodeView() {
+        return ReactNodeViewRenderer(MathInlineNodeView);
+      },
+    });
+  }, []);
+
+  const MathBlockWithView = useMemo(() => {
+    return MathBlock.extend({
+      addNodeView() {
+        return ReactNodeViewRenderer(MathBlockNodeView);
+      },
+    });
+  }, []);
+
   const CustomImage = useMemo(() =>
     Image.extend({
       inline: true,
@@ -140,7 +163,11 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
 
   const editor = useEditor({
     extensions: [
-      ...createMarkdownExtensions({ htmlBlock: HtmlBlockWithView }),
+      ...createMarkdownExtensions({
+        htmlBlock: HtmlBlockWithView,
+        mathInline: MathInlineWithView,
+        mathBlock: MathBlockWithView,
+      }),
       MermaidCodeBlock.configure({
         lowlight,
         defaultLanguage: null, // Null lets Tiptap detect language from markdown info string

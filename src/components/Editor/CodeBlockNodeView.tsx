@@ -1,6 +1,7 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from '@tiptap/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { normalizeLanguage } from '@/lib/codeBlockUtils';
+import { loadKatex, renderMath } from '@/lib/katex';
 import { Copy, Check, Trash2, ChevronDown } from 'lucide-react';
 
 type MermaidNamespace = typeof import('mermaid');
@@ -34,6 +35,7 @@ const COMMON_LANGUAGES: { value: string; label: string }[] = [
   { value: 'json', label: 'JSON' },
   { value: 'kotlin', label: 'Kotlin' },
   { value: 'markdown', label: 'Markdown' },
+  { value: 'math', label: 'Math (LaTeX)' },
   { value: 'mermaid', label: 'Mermaid' },
   { value: 'php', label: 'PHP' },
   { value: 'powershell', label: 'PowerShell' },
@@ -58,6 +60,7 @@ function getLanguageLabel(lang: string): string {
 export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeViewProps) {
   const language = normalizeLanguage(node.attrs.language || '');
   const isMermaid = language === 'mermaid';
+  const isMath = language === 'math';
   const code = node.textContent ?? '';
   const reactId = useId();
   const renderId = `mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -66,6 +69,9 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
   const [isRendering, setIsRendering] = useState(false);
   const mermaidRef = useRef<MermaidInstance | null>(null);
   const [mermaidReady, setMermaidReady] = useState(false);
+  const [mathHtml, setMathHtml] = useState<string | null>(null);
+  const [mathError, setMathError] = useState<string | null>(null);
+  const katexRef = useRef<Awaited<ReturnType<typeof loadKatex>> | null>(null);
 
   const [hovered, setHovered] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -140,6 +146,42 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
       cancelled = true;
     };
   }, [code, isMermaid, mermaidReady, renderId]);
+
+  // ```math / ```latex fenced blocks render as display math, sharing the
+  // same lazy-loaded KaTeX helper as `MathBlockNodeView`/`MathInlineNodeView`.
+  useEffect(() => {
+    if (!isMath) return;
+
+    let cancelled = false;
+    const trimmed = code.trim();
+
+    const render = async () => {
+      if (trimmed.length === 0) {
+        setMathHtml(null);
+        setMathError(null);
+        return;
+      }
+      try {
+        if (!katexRef.current) {
+          katexRef.current = await loadKatex();
+        }
+        if (cancelled) return;
+        const result = renderMath(katexRef.current, trimmed, true);
+        setMathHtml(result.html);
+        setMathError(result.error);
+      } catch (err) {
+        if (!cancelled) {
+          setMathHtml(null);
+          setMathError(err instanceof Error ? err.message : 'Failed to load KaTeX');
+        }
+      }
+    };
+
+    void render();
+    return () => {
+      cancelled = true;
+    };
+  }, [code, isMath]);
 
   useEffect(() => {
     if (!langDropdownOpen) return;
@@ -233,7 +275,7 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
     </div>
   );
 
-  if (!isMermaid) {
+  if (!isMermaid && !isMath) {
     return (
       <NodeViewWrapper
         className="tiptap-codeblock"
@@ -242,6 +284,32 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
       >
         {toolbarVisible && toolbar}
         <pre className={`language-${language}`}>
+          <NodeViewContent as="code" />
+        </pre>
+      </NodeViewWrapper>
+    );
+  }
+
+  if (isMath) {
+    return (
+      <NodeViewWrapper
+        className="tiptap-codeblock math-block"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        {toolbarVisible && toolbar}
+        <div className="math-block-preview" contentEditable={false}>
+          {mathError && (
+            <div className="math-error">
+              <strong>Math error:</strong> {mathError}
+            </div>
+          )}
+          {!mathError && mathHtml && (
+            <div className="math-katex" dangerouslySetInnerHTML={{ __html: mathHtml }} />
+          )}
+          {!mathError && !mathHtml && <div className="math-status">Empty equation</div>}
+        </div>
+        <pre className="language-math math-block-source">
           <NodeViewContent as="code" />
         </pre>
       </NodeViewWrapper>
