@@ -44,21 +44,23 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
     // running headers/footers can be detected by looking across all pages
     // before any single page is rendered.
     let mut pages: Vec<PageContent> = Vec::new();
-    for (page_index, page) in doc.pages().iter().enumerate() {
+    for page in doc.pages().iter() {
         pages.push(PageContent {
-            blocks: extract_page_blocks(&page, page_index, media)?,
+            blocks: extract_page_blocks(&page, media)?,
             h_rules: collect_horizontal_rules(&page),
             height: page.height().value,
         });
     }
 
     let hf_keys = detect_running_headers_footers(&pages);
+    let repeated_images = detect_repeated_images(&pages);
 
     // Pass 2: render each page, dropping any blocks identified as a repeated
-    // running header/footer.
+    // running header/footer (text or image).
     let mut md = String::new();
     for page in &pages {
         let kept = filter_header_footer_blocks(&page.blocks, page.height, &hf_keys);
+        let kept = filter_repeated_images(&kept, &repeated_images);
         md.push_str(&render_page_blocks(&kept, &page.h_rules));
         md.push('\n');
     }
@@ -299,6 +301,78 @@ fn collapse_dot_leader(text: &str) -> String {
     // Collapse whitespace left by the leader (e.g. before the trailing page
     // number) down to single spaces, and trim stray edges.
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Derives a content-addressed media key for an extracted image: a 64-bit
+/// SipHash of `bytes` (via `std::hash::DefaultHasher`, no new dependency)
+/// prefixed with the byte length as a cheap extra collision guard. Two pages
+/// embedding byte-identical images (e.g. a repeated header/footer logo) get
+/// the *same* key, so `MediaSink::add`'s existing de-dup-by-key collapses
+/// them to a single written file and a single `![]()` link text — which in
+/// turn is what lets [`detect_repeated_images`] recognize the same image
+/// recurring across pages (it compares rendered link text, not raw bytes).
+fn content_image_key(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("pdf-img-{}-{:016x}.png", bytes.len(), hasher.finish())
+}
+
+/// True if `text` has a TOC-style leader: either a literal-dot run (see
+/// [`contains_dot_leader`]) or a real ellipsis glyph (U+2026). PDFs often
+/// extract a rendered "…" character rather than a run of "." glyphs, and that
+/// case is *not* a dot run, so `contains_dot_leader` alone misses it — this
+/// is the union used specifically for TOC *region* detection ([`detect_toc_regions`]),
+/// so `contains_dot_leader` itself stays literal-dots-only everywhere else
+/// (no risk of a stray "…" in ordinary prose being treated as a leader).
+fn has_leader(text: &str) -> bool {
+    contains_dot_leader(text) || text.contains('…')
+}
+
+/// True if `text` starts with a section-number prefix like "13.", "13.1." or
+/// "13.1.2", followed by whitespace (or end of line) — the shape of a TOC
+/// entry's leading number. The prefix run is digits and dots only, so a date
+/// like "2024-07-26" (a dash breaks the run before any following space) or a
+/// letter-led heading like "13.G" (no space after the run) don't match.
+fn starts_with_section_number(text: &str) -> bool {
+    let t = text.trim_start();
+    let prefix_len = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .count();
+    if prefix_len == 0 || !t[..prefix_len].chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    t[prefix_len..].is_empty() || t[prefix_len..].starts_with(char::is_whitespace)
+}
+
+/// True if `text`, once its leader punctuation (dots, ellipsis, spaces) is
+/// stripped, is a non-empty run of ASCII digits — a detached TOC page-number
+/// fragment like "… 65" or "...... 68" that streamed in as its own line.
+fn is_bare_page_ref(text: &str) -> bool {
+    let stripped: String = text
+        .chars()
+        .filter(|&c| c != '.' && c != '…' && !c.is_whitespace())
+        .collect();
+    !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_digit())
+}
+
+/// True if `text` already ends with a page number (last non-space char is a
+/// digit) — i.e. a TOC entry that doesn't need a detached page ref merged in.
+fn ends_with_page_number(text: &str) -> bool {
+    text.trim_end().chars().next_back().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// Returns the trailing run of ASCII digits in `text` (e.g. "… 65" -> "65"),
+/// or an empty string if `text` doesn't end in digits.
+fn trailing_digits(text: &str) -> String {
+    text.chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 /// Ensures `out` ends with a blank line (two trailing newlines), unless it's
@@ -621,6 +695,28 @@ fn detect_gutter(blocks: &[TextBlock]) -> Option<f32> {
         return None;
     }
 
+    // A dot-leader (TOC) line often extracts as many separate short "."
+    // text runs rather than one merged block, so no single block spans wide
+    // enough to "straddle" a candidate gutter on its own — yet the line
+    // still has content near both edges of the page (title on the left,
+    // page number on the right), which otherwise looks exactly like
+    // evidence for a genuine two-column split. Excluding such lines from
+    // the two-sided tally (rather than tightening the general straddle
+    // check, which would weaken real gutter detection) keeps TOC pages from
+    // being misread as two-column layout — see the IEEE Access regression
+    // this function otherwise guards for.
+    let line_is_dot_leader: Vec<bool> = lines
+        .iter()
+        .map(|line| {
+            let mut sorted = line.clone();
+            sorted.sort_by(|&a, &b| {
+                blocks[a].x.partial_cmp(&blocks[b].x).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let joined: String = sorted.iter().map(|&i| blocks[i].text.trim()).collect();
+            contains_dot_leader(&joined)
+        })
+        .collect();
+
     let x_min = text_indices.iter().map(|&i| blocks[i].x).fold(f32::MAX, f32::min);
     let x_max = text_indices
         .iter()
@@ -644,7 +740,10 @@ fn detect_gutter(blocks: &[TextBlock]) -> Option<f32> {
         let mut straddle_weight = 0.0f32;
         let mut total_weight = 0.0f32;
 
-        for line in &lines {
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line_is_dot_leader[line_idx] {
+                continue;
+            }
             let mut has_left = false;
             let mut has_right = false;
             let mut line_straddles = false;
@@ -979,6 +1078,49 @@ fn filter_header_footer_blocks(
         .collect()
 }
 
+/// Scans every page's image blocks and returns the `text` (the rendered
+/// `![](...)` link, which — thanks to [`content_image_key`] — is identical
+/// across pages for byte-identical source images) of every image that
+/// recurs on at least `HF_MIN_PAGES` distinct pages: a repeated running
+/// header/footer logo or watermark, not incidental content-image reuse.
+/// Mirrors [`detect_running_headers_footers`]'s dedupe-per-page-then-tally
+/// shape, but is deliberately position-independent (no margin-band
+/// restriction) so a centered watermark is caught too, not just a logo
+/// confined to the header/footer band.
+fn detect_repeated_images(pages: &[PageContent]) -> HashSet<String> {
+    let mut page_counts: HashMap<String, usize> = HashMap::new();
+    for page in pages {
+        let seen_this_page: HashSet<&str> = page
+            .blocks
+            .iter()
+            .filter(|b| b.is_image)
+            .map(|b| b.text.as_str())
+            .collect();
+        for text in seen_this_page {
+            *page_counts.entry(text.to_string()).or_insert(0) += 1;
+        }
+    }
+    page_counts
+        .into_iter()
+        .filter(|&(_, count)| count >= HF_MIN_PAGES)
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// Returns `blocks` with any image block whose link text is in
+/// `repeated_images` removed. A no-op (returns a full copy) when
+/// `repeated_images` is empty.
+fn filter_repeated_images(blocks: &[TextBlock], repeated_images: &HashSet<String>) -> Vec<TextBlock> {
+    if repeated_images.is_empty() {
+        return blocks.to_vec();
+    }
+    blocks
+        .iter()
+        .filter(|b| !(b.is_image && repeated_images.contains(&b.text)))
+        .cloned()
+        .collect()
+}
+
 /// One page's extracted content, collected up front (Pass 1) so that
 /// [`detect_running_headers_footers`] can look across all pages before any
 /// page is rendered.
@@ -995,11 +1137,9 @@ struct PageContent {
 /// header/footer detection.
 fn extract_page_blocks(
     page: &PdfPage,
-    page_index: usize,
     media: &mut MediaSink,
 ) -> Result<Vec<TextBlock>, ConversionError> {
     let mut blocks: Vec<TextBlock> = Vec::new();
-    let mut image_index = 0usize;
 
     for obj in page.objects().iter() {
         if let Some(text_obj) = obj.as_text_object() {
@@ -1030,8 +1170,6 @@ fn extract_page_blocks(
                 Ok(m) => (m.e(), m.f()),
                 Err(_) => (0.0, 0.0),
             };
-            image_index += 1;
-            let part_name = format!("pdf-page{}-image{}.png", page_index + 1, image_index);
             let md = match image_obj.get_raw_image() {
                 Ok(dynamic_image) => {
                     let mut png_bytes: Vec<u8> = Vec::new();
@@ -1042,7 +1180,14 @@ fn extract_page_blocks(
                         )
                         .is_ok();
                     if encoded {
-                        match media.add(&part_name, &png_bytes) {
+                        // Content-addressed key (not a per-page name): two
+                        // pages embedding byte-identical images (e.g. a
+                        // repeated header/footer logo) collapse to the same
+                        // written asset via `MediaSink`'s de-dup, and their
+                        // blocks get identical `text`, which is what lets
+                        // `detect_repeated_images` recognize the recurrence.
+                        let key = content_image_key(&png_bytes);
+                        match media.add(&key, &png_bytes) {
                             Some(rel_path) => format!("![]({})", rel_path),
                             None => "*(unsupported image)*".to_string(),
                         }
@@ -1116,6 +1261,158 @@ fn render_page_blocks(blocks: &[TextBlock], h_rules: &[f32]) -> String {
     }
 }
 
+/// Minimum number of leader lines (dot-run or ellipsis-glyph, see
+/// [`has_leader`]) required within a run of "continuable" lines before it's
+/// accepted as a TOC region. Mirrors `MIN_CORE_ROWS` / `HF_MIN_PAGES` — the
+/// same "require repeated structural evidence" gate used elsewhere in this
+/// file, so an isolated one-off leader line (e.g. a single "see fig ..... 5"
+/// in body text) doesn't get swept into region treatment; it keeps the
+/// existing per-line handling in `render_region` instead.
+const TOC_MIN_LEADER_LINES: usize = 3;
+
+/// Scans a region's visual lines (already rendered to text, with an
+/// `is_image_line` flag per line) for contiguous runs that look like a table
+/// of contents, and returns each qualifying run as an inclusive
+/// `(start_line, end_line)` index range (both indices into `line_texts` /
+/// `is_image_line`).
+///
+/// A line is "continuable" — i.e. it could plausibly belong to a TOC entry —
+/// if it's blank, image-only, has a leader ([`has_leader`]), or starts a new
+/// entry ([`starts_with_section_number`]); this also covers wrapped title
+/// tails and detached page-number fragments, which have none of those
+/// properties on their own but sit *between* qualifying lines within the same
+/// maximal run. A run is only promoted to a region if it contains at least
+/// `TOC_MIN_LEADER_LINES` leader lines — the same repeated-evidence gate used
+/// for table/gutter/header-footer detection — then leading/trailing
+/// blank/image-only lines are trimmed off the region's ends so a stray blank
+/// line doesn't get swallowed into TOC rendering.
+fn detect_toc_regions(line_texts: &[String], is_image_line: &[bool]) -> Vec<(usize, usize)> {
+    let n = line_texts.len();
+    let is_continuable = |i: usize| -> bool {
+        is_image_line[i]
+            || line_texts[i].trim().is_empty()
+            || has_leader(&line_texts[i])
+            || starts_with_section_number(&line_texts[i])
+    };
+
+    let mut regions = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if !is_continuable(i) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut leader_count = 0usize;
+        while i < n && is_continuable(i) {
+            if !is_image_line[i] && has_leader(&line_texts[i]) {
+                leader_count += 1;
+            }
+            i += 1;
+        }
+        let mut end = i - 1;
+        if leader_count >= TOC_MIN_LEADER_LINES {
+            let mut s = start;
+            while s <= end && (is_image_line[s] || line_texts[s].trim().is_empty()) {
+                s += 1;
+            }
+            while end > s && (is_image_line[end] || line_texts[end].trim().is_empty()) {
+                end -= 1;
+            }
+            if s <= end {
+                regions.push((s, end));
+            }
+        }
+    }
+    regions
+}
+
+/// Reflows a detected TOC region (`line_texts[start..=end]`, with
+/// `is_image_line` flags) into a uniform Markdown bullet list, one `- ` per
+/// logical entry, and returns it (including the trailing blank line that
+/// closes the list). Unlike ordinary body text, no heading/list/table
+/// classification runs here — a TOC entry is never promoted to a heading no
+/// matter its font size or ALL-CAPS shape.
+///
+/// Each line is first leader-collapsed ([`collapse_dot_leader`], which passes
+/// a real "…" glyph through unchanged). Then, in order:
+/// - An image line flushes any accumulated entry as a bullet, emits the image
+///   on its own line, and resets — a safety net for the rare non-repeated
+///   image landing inside a TOC (repeated ones are already stripped
+///   upstream), so nothing is silently dropped.
+/// - A detached page-number fragment ([`is_bare_page_ref`]) is FIFO-assigned
+///   to the earliest still-"needy" entry (the cursor skips past any entry
+///   that already [`ends_with_page_number`]) — handles titles and their page
+///   numbers streaming in out of line-order.
+/// - A line starting a new section number ([`starts_with_section_number`])
+///   opens a new entry.
+/// - Anything else is a wrapped continuation of the current entry's title,
+///   joined with [`append_wrapped`] (hyphen-aware, same as body reflow).
+fn render_toc_region(line_texts: &[String], is_image_line: &[bool], start: usize, end: usize) -> String {
+    let mut out = String::new();
+    let mut entries: Vec<String> = Vec::new();
+    let mut needy_cursor = 0usize;
+
+    let flush_entries = |out: &mut String, entries: &mut Vec<String>, needy_cursor: &mut usize| {
+        for entry in entries.iter() {
+            if entry.is_empty() {
+                continue;
+            }
+            out.push_str("- ");
+            out.push_str(entry);
+            out.push('\n');
+        }
+        entries.clear();
+        *needy_cursor = 0;
+    };
+
+    for idx in start..=end {
+        if is_image_line[idx] {
+            let text = line_texts[idx].trim();
+            if text.is_empty() {
+                continue;
+            }
+            flush_entries(&mut out, &mut entries, &mut needy_cursor);
+            out.push_str(text);
+            out.push_str("\n\n");
+            continue;
+        }
+        let collapsed = collapse_dot_leader(&line_texts[idx]);
+        let text = collapsed.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        if is_bare_page_ref(text) {
+            let digits = trailing_digits(text);
+            while needy_cursor < entries.len() && ends_with_page_number(&entries[needy_cursor]) {
+                needy_cursor += 1;
+            }
+            if needy_cursor < entries.len() {
+                let entry = &mut entries[needy_cursor];
+                if !entry.ends_with(' ') {
+                    entry.push(' ');
+                }
+                entry.push_str(&digits);
+                needy_cursor += 1;
+            } else {
+                entries.push(text.to_string());
+            }
+            continue;
+        }
+
+        if starts_with_section_number(text) || entries.is_empty() {
+            entries.push(text.to_string());
+        } else {
+            append_wrapped(entries.last_mut().expect("checked non-empty"), text);
+        }
+    }
+
+    flush_entries(&mut out, &mut entries, &mut needy_cursor);
+    out.push('\n');
+    out
+}
+
 /// Renders one reading-order region of a page as Markdown — either the
 /// whole page (no multi-column layout detected) or a single column of a
 /// two-column band. Groups the region's blocks into visual lines top to
@@ -1175,14 +1472,45 @@ fn render_region(
         });
     }
 
+    // Precompute each line's joined text and image-only flag once, reused by
+    // both TOC region detection and the per-line text below (previously
+    // recomputed inside the loop).
+    let line_texts: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|&idx| blocks[idx].text.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+    let image_line_flags: Vec<bool> = lines
+        .iter()
+        .map(|line| line.iter().all(|&idx| blocks[idx].is_image))
+        .collect();
+
+    // Detect TOC regions up front (see `detect_toc_regions`) so table
+    // detection can skip their lines entirely — this also keeps glyph-leader
+    // ("…") TOC entries, which `row_has_dot_leader` alone wouldn't catch,
+    // from being misread as a 2-column table.
+    let toc_regions = detect_toc_regions(&line_texts, &image_line_flags);
+    let mut in_toc = vec![false; lines.len()];
+    for &(s, e) in &toc_regions {
+        for flag in &mut in_toc[s..=e] {
+            *flag = true;
+        }
+    }
+
     // Detect table regions before emitting: segment each line into cells,
     // then cluster consecutive lines that share ≥2 aligned columns. See
     // `detect_table_regions` for the conservative gating rules.
     let gap_thresh = body_size * 1.2;
     let rows: Vec<Vec<Cell>> = lines
         .iter()
-        .map(|line| {
-            if line.iter().all(|&i| blocks[i].is_image) {
+        .enumerate()
+        .map(|(idx, line)| {
+            if in_toc[idx] || line.iter().all(|&i| blocks[i].is_image) {
                 Vec::new()
             } else {
                 segment_line_into_cells(blocks, line, gap_thresh)
@@ -1195,16 +1523,37 @@ fn render_region(
     let mut out = String::new();
     let mut prev_y = f32::MAX;
     let mut region_idx = 0;
+    let mut toc_idx = 0;
     let mut i = 0;
     // Tracks whether the previous emitted line was a TOC entry, so
     // consecutive entries form one contiguous Markdown list and a blank line
-    // opens/closes the list around non-TOC content.
+    // opens/closes the list around other content.
     let mut prev_was_toc = false;
     // Accumulates consecutive plain body lines into one paragraph; flushed
     // (see `flush_paragraph`) at every paragraph-break point.
     let mut paragraph = String::new();
 
     while i < lines.len() {
+        // Emit a whole detected TOC region in one shot, then skip past it —
+        // checked before table regions since TOC lines never seed a table
+        // (their rows were blanked above).
+        if toc_idx < toc_regions.len() && toc_regions[toc_idx].0 == i {
+            flush_paragraph(&mut out, &mut paragraph);
+            let (start, end) = toc_regions[toc_idx];
+            if !prev_was_toc {
+                ensure_blank_line(&mut out);
+            }
+            out.push_str(&render_toc_region(&line_texts, &image_line_flags, start, end));
+            prev_y = line_ys[end];
+            prev_was_toc = true;
+            i = end + 1;
+            toc_idx += 1;
+            while region_idx < regions.len() && regions[region_idx].start_line <= end {
+                region_idx += 1;
+            }
+            continue;
+        }
+
         // Emit a whole detected table region in one shot, then skip past it.
         if region_idx < regions.len() && regions[region_idx].start_line == i {
             flush_paragraph(&mut out, &mut paragraph);
@@ -1229,12 +1578,7 @@ fn render_region(
         }
 
         let line = &lines[i];
-        let line_text: String = line
-            .iter()
-            .map(|&idx| blocks[idx].text.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let line_text = &line_texts[i];
         if line_text.is_empty() {
             i += 1;
             continue;
@@ -1245,18 +1589,18 @@ fn render_region(
             .map(|&idx| blocks[idx].font_size)
             .fold(0.0f32, f32::max);
         let y = line_ys[i];
-        let is_image_line = line.iter().all(|&idx| blocks[idx].is_image);
+        let is_image_line = image_line_flags[i];
 
         // TOC entries (dot-leader lines) render as a flat bullet list instead
         // of prose/headings, with the leader collapsed to a compact "…".
-        let is_toc = !is_image_line && contains_dot_leader(&line_text);
+        let is_toc = !is_image_line && contains_dot_leader(line_text);
         if is_toc {
             flush_paragraph(&mut out, &mut paragraph);
             if !prev_was_toc {
                 ensure_blank_line(&mut out);
             }
             out.push_str("- ");
-            out.push_str(&collapse_dot_leader(&line_text));
+            out.push_str(&collapse_dot_leader(line_text));
             out.push('\n');
             prev_y = y;
             prev_was_toc = true;
@@ -1286,23 +1630,23 @@ fn render_region(
             "## "
         } else if max_font >= body_size * 1.15 {
             "### "
-        } else if is_all_caps_heading(&line_text) {
+        } else if is_all_caps_heading(line_text) {
             "## "
         } else {
             ""
         };
 
-        let is_list = !is_image_line && heading.is_empty() && is_list_marker(&line_text);
+        let is_list = !is_image_line && heading.is_empty() && is_list_marker(line_text);
 
         if !heading.is_empty() || is_image_line || is_list {
             flush_paragraph(&mut out, &mut paragraph);
             out.push_str(heading);
-            out.push_str(&line_text);
+            out.push_str(line_text);
             out.push_str("\n\n");
         } else if paragraph.is_empty() {
-            paragraph.push_str(&line_text);
+            paragraph.push_str(line_text);
         } else {
-            append_wrapped(&mut paragraph, &line_text);
+            append_wrapped(&mut paragraph, line_text);
         }
 
         prev_y = y;
@@ -1598,6 +1942,34 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_gutter_ignores_dot_leader_toc_lines() {
+        // Regression test for a real-world PDF whose TOC page was
+        // misdetected as two-column: pdfium extracts each "." of a literal
+        // dot-leader as its own tiny text run rather than one merged block,
+        // so no single block straddles a candidate gutter — but the line
+        // still has title text near the left edge and a page number near
+        // the right edge, which otherwise satisfies `detect_gutter`'s
+        // two-sided-line evidence exactly like a genuine two-column body
+        // would. Each simulated line below is built the same way pdfium
+        // would emit it: one block for the title, then many single-"."
+        // blocks spaced out across the line, then one block for the page
+        // number.
+        let mut blocks = Vec::new();
+        for row in 0..6 {
+            let y = 500.0 - row as f32 * 20.0;
+            blocks.push(text_block(0.0, y, "13.1 SEARCH AND DISPLAY CONTRACT"));
+            for dot in 0..20 {
+                blocks.push(text_block(300.0 + dot as f32 * 8.0, y, "."));
+            }
+            blocks.push(text_block(480.0, y, "65"));
+        }
+        assert!(
+            detect_gutter(&blocks).is_none(),
+            "a dot-leader TOC page must not be misread as two-column layout"
+        );
+    }
+
+    #[test]
     fn test_detect_gutter_finds_split_with_full_width_heading_present() {
         // A full-width heading line plus a two-column body below it — the
         // heading straddles every candidate gutter, but shouldn't prevent
@@ -1858,4 +2230,186 @@ mod tests {
         assert_eq!(kept.len(), page.blocks.len());
     }
 
+    // --- TOC region detection / rendering ---
+
+    #[test]
+    fn test_has_leader_recognizes_glyph_and_dots() {
+        assert!(has_leader("Introduction … 5"));
+        assert!(has_leader("Introduction .... 5"));
+        assert!(!has_leader("Ordinary prose."));
+    }
+
+    #[test]
+    fn test_starts_with_section_number_accepts_toc_prefixes() {
+        assert!(starts_with_section_number("13. G – CONTRACT"));
+        assert!(starts_with_section_number("13.1 G01 – SEARCH"));
+        assert!(starts_with_section_number("13.1.2 Sub-entry"));
+    }
+
+    #[test]
+    fn test_starts_with_section_number_rejects_dates_and_letter_prefixes() {
+        // Dash breaks the digit/dot run before any following space.
+        assert!(!starts_with_section_number("2024-07-26 Initial Version"));
+        // No space after the numeric run.
+        assert!(!starts_with_section_number("13.G – CONTRACT"));
+        assert!(!starts_with_section_number("Ordinary prose"));
+    }
+
+    #[test]
+    fn test_is_bare_page_ref() {
+        assert!(is_bare_page_ref("… 65"));
+        assert!(is_bare_page_ref("...... 68"));
+        assert!(!is_bare_page_ref("13.1 G01 … 65")); // has non-digit title text
+        assert!(!is_bare_page_ref("…")); // no digits at all
+    }
+
+    #[test]
+    fn test_ends_with_page_number_and_trailing_digits() {
+        assert!(ends_with_page_number("13.1 G01 – SEARCH … 65"));
+        assert!(!ends_with_page_number("13.1 G01 – SEARCH …"));
+        assert_eq!(trailing_digits("13.1 G01 – SEARCH … 65"), "65");
+        assert_eq!(trailing_digits("no digits here"), "");
+    }
+
+    #[test]
+    fn test_content_image_key_stable_for_identical_bytes_distinct_otherwise() {
+        let bytes_a = vec![1u8, 2, 3, 4];
+        let bytes_b = vec![1u8, 2, 3, 4];
+        let bytes_c = vec![9u8, 9, 9];
+        assert_eq!(content_image_key(&bytes_a), content_image_key(&bytes_b));
+        assert_ne!(content_image_key(&bytes_a), content_image_key(&bytes_c));
+    }
+
+    #[test]
+    fn test_detect_toc_regions_finds_run_with_enough_leaders() {
+        let lines: Vec<String> = vec![
+            "13. G – CONTRACT … 65".to_string(),
+            "13.1 G01 – SEARCH & DISPLAY CONTRACT …".to_string(),
+            "13.2 G02 – MAINTAIN CONTRACT RECORDS …".to_string(),
+            "… 65".to_string(),
+            "… 68".to_string(),
+        ];
+        let is_image = vec![false; lines.len()];
+        let regions = detect_toc_regions(&lines, &is_image);
+        assert_eq!(regions, vec![(0, 4)]);
+    }
+
+    #[test]
+    fn test_detect_toc_regions_ignores_isolated_leader_line() {
+        // Only one leader line in the whole page — below TOC_MIN_LEADER_LINES,
+        // so it's left to the existing per-line fallback instead of being
+        // swept into region treatment.
+        let lines: Vec<String> = vec![
+            "Ordinary paragraph text.".to_string(),
+            "See figure below ..... 5".to_string(),
+            "More ordinary prose follows here.".to_string(),
+        ];
+        let is_image = vec![false; lines.len()];
+        assert!(detect_toc_regions(&lines, &is_image).is_empty());
+    }
+
+    #[test]
+    fn test_render_toc_region_reassociates_detached_page_numbers() {
+        // Regression test for the reported bug: titles stream in, then their
+        // page numbers arrive as separate detached lines afterward (FIFO
+        // order), and a wrapped title tail should merge into its entry.
+        let lines: Vec<String> = vec![
+            "14. H – DOCTOR APPROVAL … 75".to_string(),
+            "14.1 H01 – MAINTAIN APPROVAL LABEL IN SERVICE LEVEL … 76".to_string(),
+            "14.2 H02 – APPROVAL LABEL (WITH SERVICE) ON NEW CS CODE /".to_string(),
+            "CS CODE VERSION … 82".to_string(),
+        ];
+        let is_image = vec![false; lines.len()];
+        let md = render_toc_region(&lines, &is_image, 0, lines.len() - 1);
+
+        assert!(!md.contains('#'), "TOC region must never emit a heading:\n{md}");
+        assert!(
+            md.contains("- 14.2 H02 – APPROVAL LABEL (WITH SERVICE) ON NEW CS CODE / CS CODE VERSION … 82"),
+            "expected wrapped title tail merged into its entry:\n{md}"
+        );
+    }
+
+    #[test]
+    fn test_render_toc_region_fifo_assigns_detached_page_numbers_in_order() {
+        let lines: Vec<String> = vec![
+            "13.1 G01 – SEARCH & DISPLAY CONTRACT …".to_string(),
+            "13.2 G02 – MAINTAIN CONTRACT RECORDS …".to_string(),
+            "… 65".to_string(),
+            "… 68".to_string(),
+        ];
+        let is_image = vec![false; lines.len()];
+        let md = render_toc_region(&lines, &is_image, 0, lines.len() - 1);
+        let bullets: Vec<&str> = md.lines().filter(|l| l.starts_with("- ")).collect();
+        assert_eq!(bullets.len(), 2);
+        assert!(bullets[0].ends_with("65"), "first entry should get 65:\n{md}");
+        assert!(bullets[1].ends_with("68"), "second entry should get 68:\n{md}");
+    }
+
+    // --- Repeated image stripping ---
+
+    /// Builds an image `TextBlock` (as `extract_page_blocks` would) with the
+    /// given already-rendered link text.
+    fn image_block(x: f32, y: f32, text: &str) -> TextBlock {
+        TextBlock {
+            x,
+            x_end: x,
+            y,
+            font_size: 0.0,
+            text: text.to_string(),
+            is_image: true,
+        }
+    }
+
+    fn page_with_logo(logo_text: &str) -> PageContent {
+        PageContent {
+            blocks: vec![
+                image_block(50.0, 780.0, logo_text),
+                text_block(50.0, 400.0, "Unique body text for this page"),
+            ],
+            h_rules: Vec::new(),
+            height: 800.0,
+        }
+    }
+
+    #[test]
+    fn test_detect_repeated_images_flags_logo_recurring_across_pages() {
+        let pages = vec![
+            page_with_logo("![](assets/image1.png)"),
+            page_with_logo("![](assets/image1.png)"),
+            page_with_logo("![](assets/image1.png)"),
+        ];
+        let repeated = detect_repeated_images(&pages);
+        assert!(repeated.contains("![](assets/image1.png)"));
+    }
+
+    #[test]
+    fn test_detect_repeated_images_requires_min_pages() {
+        let pages = vec![
+            page_with_logo("![](assets/image1.png)"),
+            page_with_logo("![](assets/image1.png)"),
+        ];
+        let repeated = detect_repeated_images(&pages);
+        assert!(
+            repeated.is_empty(),
+            "an image on fewer than HF_MIN_PAGES pages should not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_filter_repeated_images_removes_only_flagged_images_keeps_text() {
+        let page = page_with_logo("![](assets/image1.png)");
+        let mut repeated = HashSet::new();
+        repeated.insert("![](assets/image1.png)".to_string());
+
+        let kept = filter_repeated_images(&page.blocks, &repeated);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "Unique body text for this page");
+    }
+
+    #[test]
+    fn test_filter_repeated_images_noop_when_empty() {
+        let page = page_with_logo("![](assets/image1.png)");
+        let kept = filter_repeated_images(&page.blocks, &HashSet::new());
+        assert_eq!(kept.len(), page.blocks.len());
+    }
 }

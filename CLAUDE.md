@@ -93,8 +93,30 @@ in `Editor.tsx`, which resolves the document's `assetDir` via `convertFileSrc`.
   recurring on fewer than 3 pages, or one whose text is fused with unique
   per-page content (e.g. a page-1 footer merged into a copyright notice), is
   conservatively left in place.
-- Vector image formats (EMF/WMF, common in Office exports) can't be rendered
-  by the webview — replaced with an `*(unsupported image)*` note.
+- Table-of-contents pages are detected as a region (`detect_toc_regions` in
+  `convert/pdf.rs`, gated on ≥3 leader lines — dot-run *or* ellipsis-glyph,
+  see `has_leader` — within one contiguous run of "continuable" lines, the
+  same "repeated structural evidence" gate used elsewhere in this file) and
+  reflowed as a unit (`render_toc_region`) into a uniform bulleted list:
+  heading/table classification never runs inside the region (no more a TOC
+  entry occasionally getting promoted to a spurious `##`), a wrapped title
+  tail is merged onto its entry, and a page number that streamed in as its
+  own detached line (`is_bare_page_ref`) is FIFO-reattached to the earliest
+  entry still missing one — best-effort, and can misassign on an unusually
+  reordered layout. A page whose TOC leader is extracted as many separate
+  single-`.` runs (rather than one merged block) previously fooled
+  `detect_gutter` into misreading the page as two-column, fragmenting the
+  TOC region-by-region; `detect_gutter` now excludes dot-leader lines from
+  its two-column evidence. Vector image formats (EMF/WMF, common in Office
+  exports) can't be rendered by the webview — replaced with an
+  `*(unsupported image)*` note. A repeated running image (e.g. a per-page
+  header/footer logo) is content-addressed (`content_image_key`, a 64-bit
+  hash) so identical bytes across pages collapse to one written asset, and
+  stripped from the body if it recurs on ≥3 pages (`detect_repeated_images`),
+  mirroring the header/footer text stripping below — regardless of its
+  position on the page (not band-gated), so a centered watermark is caught
+  too, at the accepted cost of also dropping a genuine content image that
+  happens to repeat identically on 3+ pages.
 - pptx animations are dropped (not representable in Markdown).
 - Optional LLM-vision image captioning (opt-in, off by default) is planned
   but not yet implemented — see `markdown-import.md`.
