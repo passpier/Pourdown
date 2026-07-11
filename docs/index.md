@@ -39,15 +39,9 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
     <p class="pd-trust">Runs entirely on your machine. No account, no upload, no runtime to install.</p>
     <div class="pd-demo-wrap">
       <div class="pd-demo-frame">
-        <div class="pd-demo-bar">
-          <span class="pd-demo-dot red"></span>
-          <span class="pd-demo-dot yellow"></span>
-          <span class="pd-demo-dot green"></span>
-          <span class="pd-demo-title">report.pdf → report.md</span>
-        </div>
         <video class="pd-demo-video" controls preload="none" playsinline poster="/demo-poster.webp" width="1108" height="720">
           <source src="/demo.mp4" type="video/mp4">
-          <a href="/Pourdown/demo.mp4">Watch the import demo</a>
+          <a href="/demo.mp4">Watch the import demo</a>
         </video>
       </div>
       <p class="pd-demo-caption">See it in action — importing a PDF and getting editable Markdown back.</p>

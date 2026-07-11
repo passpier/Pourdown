@@ -20,12 +20,10 @@
 ## Demo
 
 <p align="center">
-  <a href="https://github.com/passpier/Pourdown/blob/main/screenshots/Pourdown_import_demo.mp4">
-    <img src="./screenshots/demo-poster.webp" alt="Pourdown import demo — click to play" width="720">
-  </a>
+  <video src="https://github.com/user-attachments/assets/cd323eec-f064-475b-a209-9153d4d576ce" controls width="720"></video>
 </p>
 
-<p align="center"><em>▶ Click the image to watch — importing a PDF and getting editable Markdown back in one click.</em></p>
+<p align="center"><em>Importing a PDF and getting editable Markdown back in one click.</em></p>
 
 ## Screenshots
 

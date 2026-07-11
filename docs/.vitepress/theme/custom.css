@@ -252,29 +252,6 @@
   background: var(--pd-surface);
   box-shadow: var(--pd-shadow-lg);
 }
-.pourdown-home .pd-demo-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 11px 15px;
-  border-bottom: 1px solid var(--pd-border);
-  background: var(--pd-bg-alt);
-}
-.pourdown-home .pd-demo-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.pourdown-home .pd-demo-dot.red { background: #ff5f57; }
-.pourdown-home .pd-demo-dot.yellow { background: #febc2e; }
-.pourdown-home .pd-demo-dot.green { background: #28c840; }
-.pourdown-home .pd-demo-title {
-  margin-left: 10px;
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 12px;
-  color: var(--pd-muted);
-}
 .pourdown-home .pd-demo-video {
   display: block;
   width: 100%;
