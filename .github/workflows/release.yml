@@ -70,7 +70,22 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Pourdown v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseBody: |
+            First public beta.
+
+            ## Highlights
+            - One-click import of Word (.docx), Excel (.xlsx/.xls/.ods), PDF, and PowerPoint (.pptx) into editable Markdown.
+            - Keeps your images — embedded pictures are extracted and rendered inline, instead of being dropped.
+            - WYSIWYG editing with a raw Source-mode toggle.
+            - Export to HTML and PDF.
+            - English and 繁體中文 interface.
+
+            ## Known limitations (beta)
+            - Import is one-way (source → Markdown); no export back to Office formats.
+            - PDF import handles text-based PDFs only — no scanned/OCR; complex multi-column layouts may reorder.
+            - Spreadsheet import is capped at 500 rows/sheet; images can't be mapped to a specific cell.
+            - Vector images (EMF/WMF) can't be displayed; pptx animations are dropped.
+            - **Builds are unsigned / un-notarized.** On macOS you must remove the quarantine flag (`xattr -dr com.apple.quarantine "/Applications/Pourdown.app"`); on Windows, SmartScreen may need a one-time "More info → Run anyway". See the README for step-by-step install instructions.
           releaseDraft: true
-          prerelease: false
+          prerelease: true
           args: ${{ matrix.args }}

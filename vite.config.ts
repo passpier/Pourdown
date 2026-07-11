@@ -42,6 +42,14 @@ export default defineConfig(async () => ({
     minify: !process.env.TAURI_ENV_DEBUG ? "terser" : false,
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    terserOptions: {
+      compress: {
+        // strip dev debug logs from release builds; console.error/warn are
+        // real error handling and are left in place
+        pure_funcs: ["console.log", "console.info", "console.debug"],
+        drop_debugger: true,
+      },
+    },
     rollupOptions: {
       output: {
         manualChunks: {

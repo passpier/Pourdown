@@ -1,15 +1,15 @@
 [package]
 name = "Pourdown"
-version = "0.1.0"
+version = "0.5.0"
 description = "A Tauri-based WYSIWYG Markdown editor"
-authors = ["you"]
+authors = ["passpier"]
 edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["protocol-asset"] }
+tauri = { version = "2.0", features = ["protocol-asset", "image-png"] }
 tauri-plugin-fs = "2.0"
 tauri-plugin-dialog = "2.0"
 tauri-plugin-os = "2.0"

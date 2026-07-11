@@ -10,10 +10,21 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, AboutMetadataBuilder, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
 use regex::RegexBuilder;
+
+// Dev-only diagnostic logging: compiles to a no-op in release builds so
+// nothing but real errors reach stdout in a shipped binary. Behaves like
+// `println!` during `cargo run` / `tauri dev` (debug_assertions is set).
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        println!($($arg)*);
+    };
+}
 
 // State management
 struct AppState {
@@ -125,10 +136,10 @@ impl UserSettings {
             let settings: UserSettings = serde_json::from_value(raw)
                 .map_err(|e| format!("Failed to deserialize settings: {}", e))?;
 
-            println!("📂 Settings loaded from: {}", path.display());
+            debug_log!("📂 Settings loaded from: {}", path.display());
             Ok(Some(settings))
         } else {
-            println!("📂 Settings file not found (first launch)");
+            debug_log!("📂 Settings file not found (first launch)");
             Ok(None)
         }
     }
@@ -144,7 +155,7 @@ impl UserSettings {
         fs::write(&path, content)
             .map_err(|e| format!("Failed to write settings file: {}", e))?;
         
-        println!("💾 Settings saved to: {}", path.display());
+        debug_log!("💾 Settings saved to: {}", path.display());
         Ok(())
     }
 }
@@ -532,12 +543,12 @@ fn get_system_locale() -> Result<String, String> {
     match tauri_plugin_os::locale() {
         Some(locale_str) => {
             let normalized = normalize_language(&locale_str);
-            println!("🌍 System locale detected: {} → normalized to: {}", 
+            debug_log!("🌍 System locale detected: {} → normalized to: {}", 
                      locale_str, normalized);
             Ok(normalized)
         }
         None => {
-            println!("⚠️ System locale not available, using default: English");
+            debug_log!("⚠️ System locale not available, using default: English");
             Ok("en".to_string())
         }
     }
@@ -565,7 +576,7 @@ fn set_language(state: State<AppState>, lang: String) -> Result<(), String> {
         .map_err(|_| "Failed to lock language state".to_string())?;
     *l = normalized_lang.clone();
     
-    println!("💾 Language state updated to: {}", normalized_lang);
+    debug_log!("💾 Language state updated to: {}", normalized_lang);
     Ok(())
 }
 
@@ -577,7 +588,7 @@ fn set_language(state: State<AppState>, lang: String) -> Result<(), String> {
 #[tauri::command]
 fn get_user_settings() -> Result<UserSettings, String> {
     let settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string() });
-    println!("📂 User settings retrieved: language={}", settings.language);
+    debug_log!("📂 User settings retrieved: language={}", settings.language);
     Ok(settings)
 }
 
@@ -603,7 +614,7 @@ fn save_language_preference(lang: String, state: State<AppState>) -> Result<(), 
         .map_err(|_| "Failed to lock language state".to_string())?;
     *l = normalized_lang.clone();
     
-    println!("💾 Language preference saved and state updated to: {}", normalized_lang);
+    debug_log!("💾 Language preference saved and state updated to: {}", normalized_lang);
     Ok(())
 }
 
@@ -890,6 +901,25 @@ fn queue_open_files(app: &AppHandle, paths: Vec<String>) {
     }
 }
 
+// App metadata shown in the native About panel (macOS app menu, Help menu on
+// Windows/Linux). Version is read from Cargo.toml at compile time so it never
+// drifts from the crate's own version field; "(beta)" is appended here rather
+// than baked into the version number itself, so Cargo.toml / package.json /
+// tauri.conf.json can all stay a plain semver (0.5.0) that Windows' MSI
+// installer accepts without complaint.
+fn about_metadata<'a>() -> AboutMetadata<'a> {
+    AboutMetadataBuilder::new()
+        .name(Some("Pourdown"))
+        .version(Some(format!("{} (beta)", env!("CARGO_PKG_VERSION"))))
+        .authors(Some(vec!["passpier".into()]))
+        .comments(Some("Turn any document into clean, editable Markdown."))
+        .copyright(Some("© 2026 passpier · MIT License"))
+        .website(Some("https://passpier.github.io/Pourdown/"))
+        .website_label(Some("Website"))
+        .icon(Image::from_bytes(include_bytes!("../icons/128x128@2x.png")).ok())
+        .build()
+}
+
 fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> tauri::Result<Menu<R>> {
     let menu = Menu::new(handle)?;
 
@@ -901,7 +931,7 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
             "Pourdown",
             true,
             &[
-                &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), None)?,
+                &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata()))?,
                 &PredefinedMenuItem::separator(handle)?,
                 &PredefinedMenuItem::services(handle, Some(&get_label(lang, "app_services")))?,
                 &PredefinedMenuItem::separator(handle)?,
@@ -1094,7 +1124,17 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
     )?;
     menu.append(&window_menu)?;
 
-    // Help Menu
+    // Help Menu — carries the About item on Windows/Linux; macOS already has
+    // one in its app-name submenu above (platform convention), so it's
+    // omitted here to avoid a redundant second About entry on macOS.
+    #[cfg(not(target_os = "macos"))]
+    let help_menu = Submenu::with_items(
+        handle,
+        get_label(lang, "help"),
+        true,
+        &[&PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata()))?],
+    )?;
+    #[cfg(target_os = "macos")]
     let help_menu = Submenu::with_items(
         handle,
         get_label(lang, "help"),
@@ -1114,7 +1154,7 @@ fn main() {
     
     let default_language = match UserSettings::load() {
         Ok(Some(settings)) => {
-            println!("✅ User settings loaded from storage: language={}", settings.language);
+            debug_log!("✅ User settings loaded from storage: language={}", settings.language);
             settings.language
         }
         Ok(None) => {
@@ -1122,28 +1162,28 @@ fn main() {
             match tauri_plugin_os::locale() {
                 Some(locale_str) => {
                     let normalized = normalize_language(&locale_str);
-                    println!("🌍 No saved preference; using system locale: {} → normalized to: {}",
+                    debug_log!("🌍 No saved preference; using system locale: {} → normalized to: {}",
                              locale_str, normalized);
                     normalized
                 }
                 None => {
-                    println!("⚠️ System locale not available, using default: English");
+                    debug_log!("⚠️ System locale not available, using default: English");
                     "en".to_string()
                 }
             }
         }
         Err(e) => {
-            println!("⚠️ Failed to load user settings: {}", e);
+            debug_log!("⚠️ Failed to load user settings: {}", e);
             // Settings file is corrupt or unreadable; fall back to system locale
             match tauri_plugin_os::locale() {
                 Some(locale_str) => {
                     let normalized = normalize_language(&locale_str);
-                    println!("🌍 Falling back to system locale: {} → normalized to: {}",
+                    debug_log!("🌍 Falling back to system locale: {} → normalized to: {}",
                              locale_str, normalized);
                     normalized
                 }
                 None => {
-                    println!("⚠️ System locale not available, using default: English");
+                    debug_log!("⚠️ System locale not available, using default: English");
                     "en".to_string()
                 }
             }
@@ -1225,10 +1265,10 @@ fn main() {
             } else if event.id() == "view_theme_gruvbox" {
                 let _ = app.emit("menu-set-theme", "gruvbox");
             } else if event.id() == "lang_en" {
-                println!("🌐 User selected: English");
+                debug_log!("🌐 User selected: English");
                 // Save preference to persistent storage
                 if let Err(e) = save_language_to_storage("en") {
-                    println!("❌ Failed to save language preference: {}", e);
+                    debug_log!("❌ Failed to save language preference: {}", e);
                 }
                 // Update menu directly
                 if let Ok(menu) = create_app_menu(app, "en") {
@@ -1250,12 +1290,12 @@ fn main() {
                 }
                 // Notify frontend about the language change
                 let _ = app.emit("language-changed", "en");
-                println!("✅ Language changed to: English");
+                debug_log!("✅ Language changed to: English");
             } else if event.id() == "lang_zh" {
-                println!("🌐 User selected: Chinese");
+                debug_log!("🌐 User selected: Chinese");
                 // Save preference to persistent storage
                 if let Err(e) = save_language_to_storage("zh") {
-                    println!("❌ Failed to save language preference: {}", e);
+                    debug_log!("❌ Failed to save language preference: {}", e);
                 }
                 // Update menu directly
                 if let Ok(menu) = create_app_menu(app, "zh") {
@@ -1277,7 +1317,7 @@ fn main() {
                 }
                 // Notify frontend about the language change
                 let _ = app.emit("language-changed", "zh");
-                println!("✅ Language changed to: Chinese");
+                debug_log!("✅ Language changed to: Chinese");
             } else if event.id() == "editor_bold" {
                 emit_editor_command(app, "bold", None);
             } else if event.id() == "editor_italic" {
