@@ -10,12 +10,6 @@ use super::ConversionError;
 // Guards the one-time initialization of the global pdfium bindings.
 static PDFIUM_INIT: Mutex<bool> = Mutex::new(false);
 
-const PDF_IMPORT_NOTICE: &str = "> **Import Notice**: This PDF was imported with layout analysis. \
-Headings and paragraphs are inferred from font sizes and spacing, and standard \
-two-column layouts are detected and read column-by-column. Embedded images are \
-extracted where possible, but exact positioning and complex/irregular layouts \
-may not be fully preserved.\n\n";
-
 /// Convert Markdown to a PDF file.
 pub fn markdown_to_pdf(markdown: &str, path: &str) -> Result<(), ConversionError> {
     markdown2pdf::parse_into_file(markdown.to_string(), path, ConfigSource::Default, None)
@@ -62,7 +56,7 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
 
     // Pass 2: render each page, dropping any blocks identified as a repeated
     // running header/footer.
-    let mut md = String::from(PDF_IMPORT_NOTICE);
+    let mut md = String::new();
     for page in &pages {
         let kept = filter_header_footer_blocks(&page.blocks, page.height, &hf_keys);
         md.push_str(&render_page_blocks(&kept, &page.h_rules));
@@ -718,13 +712,29 @@ enum Region {
     TwoCol { left: Vec<usize>, right: Vec<usize> },
 }
 
+/// Below this x-gap (relative to `body_size`) between the nearest left- and
+/// right-of-gutter runs on a two-sided line, the two runs are treated as one
+/// logically continuous full-width line that pdfium happened to split at a
+/// run boundary near the gutter (e.g. a bold label immediately followed by
+/// its text, like "ABSTRACT " + "Agentic AI…" or "INDEX TERMS " + its
+/// keyword list) rather than genuine independent column content. A real
+/// two-column gutter is a dedicated empty margin band on both columns, so
+/// its gap is reliably much wider than this (measured ~20pt real gutters
+/// against ~1-9pt run gaps on a real IEEE Access two-column PDF).
+const GUTTER_LINE_GAP_FACTOR: f32 = 1.0;
+
 /// Splits a page's blocks into reading-order [`Region`]s around a detected
 /// `gutter`. Blocks are grouped into coarse visual lines (by y proximity);
-/// a line where every non-image block spans the gutter is a full-width
-/// divider (title, running header/footer, wide figure/table), which closes
-/// out any open two-column band. All other lines contribute their blocks to
-/// the current band's left or right side by which half of the gutter their
-/// center falls on.
+/// a line is a full-width divider (title, running header/footer, wide
+/// figure/table, or a heading label immediately followed by its full-width
+/// text) when either some block on it individually spans the gutter, or its
+/// left- and right-of-gutter content sit close enough together that they
+/// read as one continuous run rather than two independent columns — see
+/// `GUTTER_LINE_GAP_FACTOR`. Such a line closes out any open two-column
+/// band. All other lines (including ones with content on only one side, or
+/// two sides separated by a genuine column-width gap) contribute their
+/// blocks to the current band's left or right side by which half of the
+/// gutter their center falls on.
 fn segment_page(blocks: &[TextBlock], gutter: f32, body_size: f32) -> Vec<Region> {
     let margin = body_size * 0.5;
 
@@ -758,10 +768,31 @@ fn segment_page(blocks: &[TextBlock], gutter: f32, body_size: f32) -> Vec<Region
             .copied()
             .filter(|&i| !blocks[i].is_image)
             .collect();
-        let is_full_line = !text_indices.is_empty()
-            && text_indices
+        let is_full_line = !text_indices.is_empty() && {
+            let straddles_any = text_indices
                 .iter()
-                .all(|&i| is_full_width_block(&blocks[i], gutter, margin));
+                .any(|&i| is_full_width_block(&blocks[i], gutter, margin));
+            if straddles_any {
+                true
+            } else {
+                // No single run straddles, so check whether the line has
+                // independent content on both sides close enough together
+                // to be one continuous run split at the gutter.
+                let mut left_reach = f32::MIN;
+                let mut right_reach = f32::MAX;
+                for &i in &text_indices {
+                    let b = &blocks[i];
+                    if b.x_end <= gutter {
+                        left_reach = left_reach.max(b.x_end);
+                    } else if b.x >= gutter {
+                        right_reach = right_reach.min(b.x);
+                    }
+                }
+                left_reach != f32::MIN
+                    && right_reach != f32::MAX
+                    && (right_reach - left_reach) < body_size * GUTTER_LINE_GAP_FACTOR
+            }
+        };
 
         if is_full_line {
             if !cur_left.is_empty() || !cur_right.is_empty() {
@@ -1608,6 +1639,81 @@ mod tests {
                 assert_eq!(right.len(), 3);
             }
             other => panic!("expected two-column region second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_segment_page_treats_split_heading_run_as_full_width() {
+        // Regression test for the IEEE Access first-page bug: a heading label
+        // ("INDEX TERMS ") and its immediately-following full-width text are
+        // two separate runs that individually don't straddle the gutter
+        // margin, but sit close enough together (an ordinary run-boundary
+        // gap, not a real column gutter) that the line should still be
+        // read as one full-width line, not split across the two-column band.
+        let gutter = 235.0;
+        let mut blocks = vec![
+            TextBlock {
+                x: 0.0,
+                x_end: 230.0,
+                y: 600.0,
+                font_size: 12.0,
+                text: "INDEX TERMS ".to_string(),
+                is_image: false,
+            },
+            TextBlock {
+                x: 238.0,
+                x_end: 400.0,
+                y: 600.0,
+                font_size: 12.0,
+                text: "Agentic AI, autonomous systems, adaptability".to_string(),
+                is_image: false,
+            },
+        ];
+        for row in 0..3 {
+            let y = 580.0 - row as f32 * 20.0;
+            blocks.push(text_block(0.0, y, "Left column text here"));
+            blocks.push(text_block(250.0, y, "Right column text here"));
+        }
+        let regions = segment_page(&blocks, gutter, 12.0);
+        assert_eq!(regions.len(), 2);
+        match &regions[0] {
+            Region::Full(indices) => assert_eq!(indices, &vec![0, 1]),
+            other => panic!("expected split heading line as one full-width region, got {other:?}"),
+        }
+        match &regions[1] {
+            Region::TwoCol { left, right } => {
+                assert_eq!(left.len(), 3);
+                assert_eq!(right.len(), 3);
+            }
+            other => panic!("expected two-column region second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_segment_page_keeps_one_sided_line_bucketed_into_open_band() {
+        // A line with content on only one side of the gutter (common when a
+        // paragraph's last line in one column is shorter than its neighbor,
+        // so there's no corresponding text at that height in the other
+        // column) must stay bucketed into the open two-column band rather
+        // than being forced into its own full-width region — that would
+        // fragment ordinary two-column body text into many spurious regions.
+        let mut blocks = Vec::new();
+        for row in 0..3 {
+            let y = 580.0 - row as f32 * 20.0;
+            blocks.push(text_block(0.0, y, "Left column text here"));
+            blocks.push(text_block(250.0, y, "Right column text here"));
+        }
+        // A short trailing line with content only on the left.
+        blocks.push(text_block(0.0, 520.0, "Left"));
+
+        let regions = segment_page(&blocks, 235.0, 12.0);
+        assert_eq!(regions.len(), 1);
+        match &regions[0] {
+            Region::TwoCol { left, right } => {
+                assert_eq!(left.len(), 4);
+                assert_eq!(right.len(), 3);
+            }
+            other => panic!("expected single two-column region, got {other:?}"),
         }
     }
 

@@ -68,7 +68,14 @@ in `Editor.tsx`, which resolves the document's `assetDir` via `convertFileSrc`.
   left/right content — same "repeated structural evidence" gate as table
   detection, so an incidentally-spaced title line doesn't false-positive)
   and read column-by-column via `segment_page`/`render_region`, instead of
-  being misread as false 2-cell tables. Body lines are reflowed into
+  being misread as false 2-cell tables. Within `segment_page`, a line is
+  full-width (not split into the two-column band) if some run on it spans
+  the gutter, *or* its left/right content sit close enough together
+  (`GUTTER_LINE_GAP_FACTOR`) to be one continuous run pdfium happened to
+  split near the gutter — e.g. a heading label immediately followed by its
+  text, like "ABSTRACT " + the abstract's first line — rather than genuine
+  independent column content; a real column gutter is a much wider empty
+  margin band than an ordinary run-boundary gap. Body lines are reflowed into
   paragraphs with hyphen-aware de-hyphenation (`append_wrapped`) — only
   when the PDF's text stream has a literal hyphen glyph at the wrap point;
   some PDFs wrap without one, leaving a raw space (e.g. "bet ter"), which
