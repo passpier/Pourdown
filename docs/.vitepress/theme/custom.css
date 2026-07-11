@@ -275,18 +275,12 @@
   font-size: 12px;
   color: var(--pd-muted);
 }
-.pourdown-home .pd-demo-placeholder {
-  position: relative;
+.pourdown-home .pd-demo-video {
+  display: block;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  height: auto;
+  aspect-ratio: 1108 / 720;
   background: var(--pd-code-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--pd-muted);
-  font-size: 13.5px;
-  text-align: center;
-  padding: 24px;
 }
 .pourdown-home .pd-demo-caption {
   text-align: center;

@@ -16,7 +16,6 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
       Markdown in one click — then edit it visually. Perfect for feeding
       clean context to your LLM.
     </p>
-
     <div class="pd-dl-row">
       <a class="pd-dl-btn pd-dl-btn-primary" href="https://github.com/passpier/Pourdown/releases/latest">
         <svg class="pd-dl-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -38,7 +37,6 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
       </a>
     </div>
     <p class="pd-trust">Runs entirely on your machine. No account, no upload, no runtime to install.</p>
-
     <div class="pd-demo-wrap">
       <div class="pd-demo-frame">
         <div class="pd-demo-bar">
@@ -47,7 +45,10 @@ description: Desktop Markdown editor that converts Word, Excel, PDF, and PowerPo
           <span class="pd-demo-dot green"></span>
           <span class="pd-demo-title">report.pdf → report.md</span>
         </div>
-        <div class="pd-demo-placeholder">Demo coming soon — importing a PDF and getting editable Markdown back.</div>
+        <video class="pd-demo-video" controls preload="none" playsinline poster="/demo-poster.webp" width="1108" height="720">
+          <source src="/demo.mp4" type="video/mp4">
+          <a href="/Pourdown/demo.mp4">Watch the import demo</a>
+        </video>
       </div>
       <p class="pd-demo-caption">See it in action — importing a PDF and getting editable Markdown back.</p>
     </div>

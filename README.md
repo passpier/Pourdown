@@ -17,6 +17,16 @@
 
 <p align="center"><a href="https://passpier.github.io/Pourdown/"><strong>🌐 Website</strong></a></p>
 
+## Demo
+
+<p align="center">
+  <a href="https://github.com/passpier/Pourdown/blob/main/screenshots/Pourdown_import_demo.mp4">
+    <img src="./screenshots/demo-poster.webp" alt="Pourdown import demo — click to play" width="720">
+  </a>
+</p>
+
+<p align="center"><em>▶ Click the image to watch — importing a PDF and getting editable Markdown back in one click.</em></p>
+
 ## Screenshots
 
 <table>
