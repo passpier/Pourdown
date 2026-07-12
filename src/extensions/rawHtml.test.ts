@@ -33,17 +33,56 @@ describe('raw HTML blocks (htmlBlock)', () => {
 });
 
 describe('curated inline HTML marks', () => {
-  const cases: Array<[label: string, markdown: string]> = [
+  // kbd/u/abbr/small have no shorthand syntax and no custom `markdown.serialize`
+  // (see rawHtml.ts), so they still round-trip verbatim through tiptap-markdown's
+  // `HTMLMark` fallback.
+  const verbatimCases: Array<[label: string, markdown: string]> = [
     ['kbd', '<kbd>Ctrl</kbd>'],
-    ['mark', '<mark>highlighted text</mark>'],
-    ['sub', 'H<sub>2</sub>O'],
-    ['sup', 'x<sup>2</sup>'],
     ['u', '<u>underline</u>'],
     ['abbr', '<abbr title="HyperText Markup Language">HTML</abbr>'],
     ['small', '<small>fine print</small>'],
   ];
 
-  it.each(cases)('round-trips %s verbatim', (_label, md) => {
+  it.each(verbatimCases)('round-trips %s verbatim', (_label, md) => {
+    expect(mdRoundTrip(md).trim()).toBe(md);
+  });
+
+  // mark/sub/sup normalize HTML-tag input to their `==`/`~`/`^` shorthand on
+  // save (see the `serialize` override added in rawHtml.ts) — the shorthand
+  // itself round-trips to itself.
+  const normalizedCases: Array<[label: string, input: string, output: string]> = [
+    ['mark', '<mark>highlighted text</mark>', '==highlighted text=='],
+    ['sub', 'H<sub>2</sub>O', 'H~2~O'],
+    ['sup', 'x<sup>2</sup>', 'x^2^'],
+  ];
+
+  it.each(normalizedCases)('normalizes %s HTML input to shorthand on save', (_label, input, output) => {
+    expect(mdRoundTrip(input).trim()).toBe(output);
+  });
+
+  const shorthandCases: Array<[label: string, markdown: string]> = [
+    ['==highlight==', '==highlighted text=='],
+    ['~subscript~', 'H~2~O'],
+    ['^superscript^', 'x^2^'],
+  ];
+
+  it.each(shorthandCases)('round-trips %s shorthand verbatim', (_label, md) => {
+    expect(mdRoundTrip(md).trim()).toBe(md);
+  });
+
+  it('does not confuse ~subscript~ with ~~strikethrough~~', () => {
+    const md = '~~Scratch this.~~ and H~2~O.';
+    const editor = createHeadlessEditor(md);
+    let strikes = 0;
+    let subs = 0;
+    editor.state.doc.descendants((node) => {
+      if (node.marks.some((m) => m.type.name === 'strike')) strikes++;
+      if (node.marks.some((m) => m.type.name === 'subscript')) subs++;
+    });
+    editor.destroy();
+
+    expect(strikes).toBeGreaterThan(0);
+    expect(subs).toBeGreaterThan(0);
     expect(mdRoundTrip(md).trim()).toBe(md);
   });
 

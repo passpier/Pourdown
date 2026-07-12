@@ -1,8 +1,12 @@
-import { Mark, Node, mergeAttributes } from '@tiptap/core';
+import { Mark, Node, mergeAttributes, markInputRule } from '@tiptap/core';
 import type { MarkdownSerializerState } from '@tiptap/pm/markdown';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import markPlugin from 'markdown-it-mark';
+import subPlugin from 'markdown-it-sub';
+import supPlugin from 'markdown-it-sup';
 
 interface MarkdownItLike {
+  use: (plugin: (md: unknown) => void) => void;
   renderer: {
     rules: Record<string, (tokens: HtmlBlockToken[], idx: number) => string>;
   };
@@ -97,11 +101,16 @@ export const HtmlBlock = Node.create({
  * per-tag by markdown-it (`html_inline`) and echoed verbatim into the
  * rendered HTML string with no override needed — the browser's `DOMParser`
  * turns e.g. `<kbd>Ctrl</kbd>` back into a real `<kbd>` element, which these
- * marks' `parseHTML` picks up directly. No custom `markdown.serialize` is
- * defined for any of them: tiptap-markdown's `HTMLMark` fallback (active
+ * marks' `parseHTML` picks up directly. Most of them define no custom
+ * `markdown.serialize`: tiptap-markdown's `HTMLMark` fallback (active
  * whenever `Markdown.configure({ html: true })`, already set in
  * `markdownExtensions.ts`) writes back the exact `<tag>…</tag>` pair by
- * inspecting each mark's own `renderHTML`, so these round-trip automatically.
+ * inspecting each mark's own `renderHTML`, so those round-trip automatically.
+ * `Highlight`/`Subscript`/`Superscript` are the exception: they additionally
+ * register a markdown-it shorthand tokenizer (`==`/`~`/`^`, via
+ * `markdown-it-mark`/`-sub`/`-sup`) and a `markdown.serialize` override, so
+ * `<mark>`/`<sub>`/`<sup>` HTML input normalizes to that shorthand on save
+ * instead of falling back to `HTMLMark`.
  *
  * `<s>`/`<del>`/`<strike>` are deliberately NOT duplicated here — StarterKit's
  * built-in `Strike` mark already parses all three and serializes to GFM
@@ -120,6 +129,29 @@ export const Kbd = Mark.create({
   },
 });
 
+/**
+ * Matches `==highlight==` on input, mirroring the `*italic*`/`_italic_`
+ * pattern in `@tiptap/extension-italic` (negative lookaround so a run of
+ * `====` or a delimiter followed/preceded by whitespace doesn't false-fire).
+ */
+const highlightInputRegex = /(?:^|\s)(==(?!\s+==)((?:[^=]+))==(?!\s+==))$/;
+
+/**
+ * Matches `~sub~` on input — deliberately single-tilde only (`(?!~)` right
+ * after the opening/before the closing marker) so it can't fire on
+ * StarterKit's `~~strike~~`, which owns the double-tilde run. markdown-it
+ * itself already resolves this at the tokenizer level without any special
+ * handling here: its built-in `strikethrough` inline rule runs before
+ * `markdown-it-sub`'s rule (registered `after('emphasis', ...)`, i.e. after
+ * `strikethrough`) and claims any `~~` run outright, so `markdown-it-sub`
+ * only ever sees single `~` runs that strikethrough's own tokenizer rejected
+ * (its `len < 2` guard) — see `node_modules/markdown-it/lib/rules_inline/strikethrough.mjs`.
+ */
+const subscriptInputRegex = /(?:^|\s)(~(?!~)((?:[^~]+))~(?!~))$/;
+
+/** Matches `^sup^` on input; `^` isn't used elsewhere in this pipeline. */
+const superscriptInputRegex = /(?:^|\s)(\^(?!\^)((?:[^^]+))\^(?!\^))$/;
+
 export const Highlight = Mark.create({
   name: 'highlight',
   parseHTML() {
@@ -127,6 +159,26 @@ export const Highlight = Mark.create({
   },
   renderHTML({ HTMLAttributes }) {
     return ['mark', HTMLAttributes, 0];
+  },
+  addInputRules() {
+    return [markInputRule({ find: highlightInputRegex, type: this.type })];
+  },
+  addStorage() {
+    return {
+      markdown: {
+        // Normalizes both `==x==` and `<mark>x</mark>` input to `==x==` on
+        // save — the shorthand is the canonical serialized form, matching
+        // Typora/pandoc convention, not tiptap-markdown's default `HTMLMark`
+        // fallback (which would instead round-trip `<mark>` verbatim).
+        serialize: { open: '==', close: '==', expelEnclosingWhitespace: true, mixable: true },
+        parse: {
+          // Only this mark calls `md.use` for `markdown-it-mark` — each of
+          // the three shorthand plugins here (mark/sub/sup) is registered on
+          // its own mark exactly once, same convention as `footnotes.ts`.
+          setup: (md: MarkdownItLike) => md.use(markPlugin as unknown as (md: unknown) => void),
+        },
+      },
+    };
   },
 });
 
@@ -137,6 +189,19 @@ export const Subscript = Mark.create({
   },
   renderHTML({ HTMLAttributes }) {
     return ['sub', HTMLAttributes, 0];
+  },
+  addInputRules() {
+    return [markInputRule({ find: subscriptInputRegex, type: this.type })];
+  },
+  addStorage() {
+    return {
+      markdown: {
+        serialize: { open: '~', close: '~', expelEnclosingWhitespace: true, mixable: true },
+        parse: {
+          setup: (md: MarkdownItLike) => md.use(subPlugin as unknown as (md: unknown) => void),
+        },
+      },
+    };
   },
 });
 
@@ -150,6 +215,19 @@ export const Superscript = Mark.create({
   },
   renderHTML({ HTMLAttributes }) {
     return ['sup', HTMLAttributes, 0];
+  },
+  addInputRules() {
+    return [markInputRule({ find: superscriptInputRegex, type: this.type })];
+  },
+  addStorage() {
+    return {
+      markdown: {
+        serialize: { open: '^', close: '^', expelEnclosingWhitespace: true, mixable: true },
+        parse: {
+          setup: (md: MarkdownItLike) => md.use(supPlugin as unknown as (md: unknown) => void),
+        },
+      },
+    };
   },
 });
 

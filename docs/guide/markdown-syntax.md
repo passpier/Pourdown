@@ -25,7 +25,13 @@ All six levels are supported.
 *italic* or _italic_
 ~~strikethrough~~
 `inline code`
+==highlight==
+~subscript~
+^superscript^
 ```
+
+`<mark>`, `<sub>`, and `<sup>` HTML tags also work as input and are normalized
+to the `==`/`~`/`^` shorthand above when the document is saved.
 
 ## Line breaks
 
@@ -128,6 +134,22 @@ GFM pipe tables are supported, including left/center/right column alignment.
 Bare URLs (e.g. `https://example.com` typed directly in text) are also
 auto-linked as you type.
 
+## Definition lists
+
+```md
+Term
+: Definition text.
+
+Second term
+: First definition.
+: Second definition.
+```
+
+A blank line is required between separate terms — without one, the second
+term is read as a continuation of the first definition (standard Markdown
+paragraph rules), not a new term. A literal `<dl>`/`<dt>`/`<dd>` HTML block
+also still works, as raw HTML.
+
 ## Footnotes
 
 ```md
@@ -176,13 +198,19 @@ Other block-level HTML (e.g. `<div>`, `<details>`) passes through as raw HTML.
 As you type, `--` becomes an en dash, `...` becomes an ellipsis (`…`), `(c)`
 becomes `©`, and similar common substitutions are applied automatically.
 
+## Emoji
+
+```md
+Have a nice day :smile:!
+```
+
+Shortcodes are converted to the Unicode emoji character (😄) as you type or
+on import. This is one-way: the document is saved with the emoji character
+itself, not the `:smile:` shortcode.
+
 ## Not yet supported
 
-These are common in other Markdown editors but aren't implemented in Pourdown
-yet — tracked here as future plans rather than documented as working:
+This is common in other Markdown editors but isn't implemented in Pourdown
+yet — tracked here as a future plan rather than documented as working:
 
-- `==highlight==` shorthand (only the `<mark>` HTML tag works today)
-- `~sub~` / `^sup^` shorthand (only `<sub>`/`<sup>` HTML tags work today)
-- Definition lists (`term` / `: definition`)
-- Emoji shortcodes (`:smile:`)
 - Syntax highlighting in Source mode (Source mode is currently plain text)

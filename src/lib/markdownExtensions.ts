@@ -26,6 +26,8 @@ import {
   Small,
 } from '@/extensions/rawHtml';
 import { MathInline, MathBlock } from '@/extensions/math';
+import { EmojiShortcodes } from '@/extensions/emoji';
+import { DefinitionList, DefinitionTerm, DefinitionDescription } from '@/extensions/definitionList';
 
 export interface MarkdownExtensionOverrides {
   /**
@@ -119,5 +121,9 @@ export function createMarkdownExtensions(overrides: MarkdownExtensionOverrides =
     Underline,
     Abbreviation,
     Small,
+    EmojiShortcodes,
+    DefinitionList,
+    DefinitionTerm,
+    DefinitionDescription,
   ];
 }
