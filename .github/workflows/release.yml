@@ -26,6 +26,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0   # need full history + tags for the changelog
 
       - name: Resolve tag & version
@@ -108,6 +109,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -117,6 +120,27 @@ jobs:
       - name: Sync version from tag
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.create-release.outputs.version }}"
+
+      - name: Verify version was applied
+        shell: bash
+        env:
+          EXPECTED: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo=$(node -e "
+            const m = require('fs').readFileSync('src-tauri/Cargo.toml', 'utf8')
+              .match(/^\[package\][\s\S]*?^version\s*=\s*\"([^\"]*)\"/m);
+            process.stdout.write(m ? m[1] : '');
+          ")
+          for name in pkg conf cargo; do
+            val="${!name}"
+            if [ "$val" != "$EXPECTED" ]; then
+              echo "::error::$name version '$val' != expected '$EXPECTED'"; exit 1
+            fi
+          done
+          echo "Version $EXPECTED verified in package.json, tauri.conf.json, Cargo.toml"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
