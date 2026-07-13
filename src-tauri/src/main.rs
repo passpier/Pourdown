@@ -929,14 +929,11 @@ fn queue_open_files(app: &AppHandle, paths: Vec<String>) {
 
 // App metadata shown in the native About panel (macOS app menu, Help menu on
 // Windows/Linux). Version is read from Cargo.toml at compile time so it never
-// drifts from the crate's own version field; "(beta)" is appended here rather
-// than baked into the version number itself, so Cargo.toml / package.json /
-// tauri.conf.json can all stay a plain semver (0.5.0) that Windows' MSI
-// installer accepts without complaint.
+// drifts from the crate's own version field.
 fn about_metadata<'a>() -> AboutMetadata<'a> {
     AboutMetadataBuilder::new()
         .name(Some("Pourdown"))
-        .version(Some(format!("{} (beta)", env!("CARGO_PKG_VERSION"))))
+        .version(Some(env!("CARGO_PKG_VERSION").to_string()))
         .authors(Some(vec!["passpier".into()]))
         .comments(Some("Turn any document into clean, editable Markdown."))
         .copyright(Some("© 2026 passpier · MIT License"))

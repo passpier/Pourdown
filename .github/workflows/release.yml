@@ -5,9 +5,92 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build a release for, e.g. v0.6.0'
+        required: true
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history + tags for the changelog
+
+      - name: Resolve tag & version
+        id: meta
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes from commit log
+        id: notes
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -z "$PREV" ]; then
+            RANGE_DESC="(first release)"
+            LOG=$(git log --pretty=format:'- %s (%h)' "$TAG")
+          else
+            RANGE_DESC="$PREV → $TAG"
+            LOG=$(git log --pretty=format:'- %s (%h)' "${PREV}..${TAG}")
+          fi
+          {
+            echo "body<<RELEOF"
+            echo "## What's changed ($RANGE_DESC)"
+            echo ""
+            echo "$LOG"
+            if [ -n "$PREV" ]; then
+              echo ""
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV}...${TAG}"
+            fi
+            echo "RELEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create (or update) draft release
+        id: create
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_NAME: Pourdown v${{ steps.meta.outputs.version }}
+          RELEASE_BODY: ${{ steps.notes.outputs.body }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const payload = {
+              name: process.env.RELEASE_NAME,
+              body: process.env.RELEASE_BODY,
+              draft: true,
+              prerelease: false,  // numeric vX.Y.Z only; no beta/prerelease labels
+            };
+            let id;
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              await github.rest.repos.updateRelease({ owner, repo, release_id: existing.data.id, ...payload });
+              id = existing.data.id;
+            } catch (e) {
+              const created = await github.rest.repos.createRelease({ owner, repo, tag_name: tag, ...payload });
+              id = created.data.id;
+            }
+            return id;
+
+  build-tauri:
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -26,6 +109,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Sync version from tag
+        shell: bash
+        run: node scripts/set-version.mjs "${{ needs.create-release.outputs.version }}"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,11 +127,6 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
 
       - name: Install pnpm
         uses: pnpm/action-setup@v3
@@ -68,23 +155,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Pourdown v__VERSION__'
-          releaseBody: |
-            First public beta.
-
-            ## Highlights
-            - One-click import of Word (.docx), Excel (.xlsx/.xls/.ods), PDF, and PowerPoint (.pptx) into editable Markdown.
-            - Keeps your images — embedded pictures are extracted and rendered inline, instead of being dropped.
-            - WYSIWYG editing with a raw Source-mode toggle.
-            - Export to HTML and PDF.
-            - English and 繁體中文 interface.
-
-            ## Known limitations (beta)
-            - Import is one-way (source → Markdown); no export back to Office formats.
-            - PDF import handles text-based PDFs only — no scanned/OCR; complex multi-column layouts may reorder.
-            - Spreadsheet import is capped at 500 rows/sheet; images can't be mapped to a specific cell.
-            - Vector images (EMF/WMF) can't be displayed; pptx animations are dropped.
-          releaseDraft: true
-          prerelease: true
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
