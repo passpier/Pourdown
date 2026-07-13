@@ -11,6 +11,7 @@ import { SourceEditor } from '@/components/Editor/SourceEditor';
 import { Sidebar } from '@/components/Sidebar/Sidebar';
 import { TabBar } from '@/components/Tabs/TabBar';
 import { UnsavedCloseDialog } from '@/components/Tabs/UnsavedCloseDialog';
+import { PreferencesDialog } from '@/components/Preferences/PreferencesDialog';
 import { documentDisplayName } from '@/lib/documentTitle';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
@@ -23,6 +24,7 @@ import { getPrimaryLanguageCode } from '@/i18n/languageUtils';
 import {
   FileText,
   PanelLeft,
+  Settings,
 } from 'lucide-react';
 
 function App() {
@@ -43,6 +45,7 @@ function App() {
   const toggleEditorMode = useUIStore((state) => state.toggleEditorMode);
   const osPlatform = useUIStore((state) => state.osPlatform);
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
+  const setPreferencesOpen = useUIStore((state) => state.setPreferencesOpen);
   const language = useSettingsStore((state) => state.language);
   const hasInitializedDocument = useRef(false);
   const editor = useEditorStore((state) => state.editor);
@@ -665,6 +668,9 @@ function App() {
           }),
           listen<string>('menu-import', (e) => void handleImport(e.payload)),
           listen<string>('menu-export', (e) => void handleExport(e.payload)),
+          listen('menu-open-preferences', () => {
+            setPreferencesOpen(true);
+          }),
         ]);
 
         if (!isActive) {
@@ -685,7 +691,7 @@ function App() {
       menuUnlistenersRef.current.forEach(unlisten => unlisten());
       menuUnlistenersRef.current = [];
     };
-  }, [editor, activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, requestCloseDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport]);
+  }, [editor, activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, requestCloseDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport, setPreferencesOpen]);
 
   // Enable/disable export menu items based on whether a document is active
   useEffect(() => {
@@ -742,6 +748,15 @@ function App() {
                 {t('common.char_count', { n: charCount.toLocaleString() })}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setPreferencesOpen(true)}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={t('preferences.title')}
+              data-tauri-drag-region="false"
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </button>
             {osPlatform === 'macos' && (
               <button
                 type="button"
@@ -834,6 +849,7 @@ function App() {
         onDontSave={handleConfirmDontSave}
         onCancel={handleCancelClose}
       />
+      <PreferencesDialog />
     </div>
   );
 }

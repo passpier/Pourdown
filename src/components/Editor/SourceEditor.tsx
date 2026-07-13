@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import {
@@ -41,6 +42,8 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
   const documents = useDocumentStore((state) => state.documents);
   const updateContent = useDocumentStore((state) => state.updateContent);
   const fontSize = useUIStore((state) => state.fontSize);
+  const spellCheck = useSettingsStore((state) => state.spellCheck);
+  const wordWrap = useSettingsStore((state) => state.wordWrap);
   const findBarVisible = useUIStore((state) => state.findBarVisible);
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
   const setPendingAnchor = useEditorStore((state) => state.setPendingAnchor);
@@ -416,9 +419,12 @@ export const SourceEditor = ({ documentId }: SourceEditorProps) => {
             fontSize: `${fontSize}px`,
             fontFamily: 'var(--font-code)',
             maxWidth: `${layoutMetrics.contentWidth}px`,
+            whiteSpace: wordWrap ? 'pre-wrap' : 'pre',
+            overflowX: wordWrap ? undefined : 'auto',
           }}
           onChange={handleChange}
-          spellCheck={false}
+          spellCheck={spellCheck}
+          wrap={wordWrap ? 'soft' : 'off'}
           placeholder={t('editor.placeholder')}
         />
       </div>

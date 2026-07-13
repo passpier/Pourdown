@@ -122,5 +122,21 @@
     "save": "儲存",
     "dont_save": "不要儲存",
     "cancel": "取消"
+  },
+  "preferences": {
+    "title": "偏好設定",
+    "close": "關閉偏好設定",
+    "section_general": "一般",
+    "section_appearance": "外觀",
+    "section_editor": "編輯器",
+    "language": "語言",
+    "auto_save": "自動儲存",
+    "auto_save_description": "自動儲存已有儲存位置的檔案變更。",
+    "auto_save_interval": "自動儲存間隔",
+    "theme": "佈景主題",
+    "font_size": "字體大小",
+    "spell_check": "拼字檢查",
+    "word_wrap": "自動換行",
+    "word_wrap_description": "在原始碼模式中換行長列；視覺化編輯器一律自動換行。"
   }
 }

@@ -122,5 +122,21 @@
     "save": "Save",
     "dont_save": "Don't Save",
     "cancel": "Cancel"
+  },
+  "preferences": {
+    "title": "Preferences",
+    "close": "Close preferences",
+    "section_general": "General",
+    "section_appearance": "Appearance",
+    "section_editor": "Editor",
+    "language": "Language",
+    "auto_save": "Auto-save",
+    "auto_save_description": "Automatically save changes to files that already have a location on disk.",
+    "auto_save_interval": "Auto-save interval",
+    "theme": "Theme",
+    "font_size": "Font size",
+    "spell_check": "Spell check",
+    "word_wrap": "Word wrap",
+    "word_wrap_description": "Wraps long lines in Source mode; the visual editor always wraps."
   }
 }

@@ -8,6 +8,7 @@ import { createLowlight, common } from 'lowlight';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useEditorLayout } from '@/hooks/useEditorLayout';
 import { debounce } from '@/lib/utils';
@@ -34,6 +35,7 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const documents = useDocumentStore((state) => state.documents);
   const updateContent = useDocumentStore((state) => state.updateContent);
   const fontSize = useUIStore((state) => state.fontSize);
+  const spellCheck = useSettingsStore((state) => state.spellCheck);
   const setEditor = useEditorStore((state) => state.setEditor);
   const setPendingAnchor = useEditorStore((state) => state.setPendingAnchor);
   const consumePendingAnchor = useEditorStore((state) => state.consumePendingAnchor);
@@ -429,12 +431,13 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     if (editor) {
       const editorElement = editor.view.dom;
       editorElement.style.fontSize = `${fontSize}px`;
+      editorElement.setAttribute('spellcheck', String(spellCheck));
 
       // Apply responsive width based on layout metrics
       editorElement.style.maxWidth = `${layoutMetrics.contentWidth}px`;
       editorElement.style.width = '100%';
     }
-  }, [fontSize, editor, layoutMetrics.contentWidth]);
+  }, [fontSize, spellCheck, editor, layoutMetrics.contentWidth]);
 
   useEffect(() => {
     if (!hasMeasuredLayout && layoutMetrics.contentWidth > 0) {

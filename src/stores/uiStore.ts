@@ -14,6 +14,7 @@ interface UIState {
   sidebarSearchFocusNonce: number;
   findBarVisible: boolean;
   sidebarTab: 'files' | 'outline';
+  preferencesOpen: boolean;
   // Actions
   setCurrentTheme: (theme: ThemeName) => void;
   toggleTheme: () => void;
@@ -30,6 +31,8 @@ interface UIState {
   setFindBarVisible: (visible: boolean) => void;
   toggleFindBar: () => void;
   setSidebarTab: (tab: 'files' | 'outline') => void;
+  setPreferencesOpen: (open: boolean) => void;
+  togglePreferences: () => void;
 }
 
 type PersistedUIState = Pick<UIState, 'currentTheme' | 'sidebarVisible' | 'fontSize' | 'sidebarWidth' | 'sidebarQuery' | 'sidebarTab'>;
@@ -46,6 +49,7 @@ export const useUIStore = create<UIState>()(
       sidebarSearchFocusNonce: 0,
       findBarVisible: false,
       sidebarTab: 'files',
+      preferencesOpen: false,
       osPlatform: (() => {
         if (typeof navigator !== 'undefined') {
           if (navigator.userAgent.includes('Macintosh')) return 'macos';
@@ -125,6 +129,11 @@ export const useUIStore = create<UIState>()(
         set((state) => ({ findBarVisible: !state.findBarVisible })),
 
       setSidebarTab: (tab) => set({ sidebarTab: tab }),
+
+      setPreferencesOpen: (open) => set({ preferencesOpen: open }),
+
+      togglePreferences: () =>
+        set((state) => ({ preferencesOpen: !state.preferencesOpen })),
     }),
     {
       name: 'ui-preferences',

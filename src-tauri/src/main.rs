@@ -216,6 +216,7 @@ fn get_label(lang: &str, key: &str) -> String {
             "file_export_html" => "匯出為 HTML...".to_string(),
             "file_export_pdf"  => "匯出為 PDF...".to_string(),
             "app_about" => "關於 Pourdown".to_string(),
+            "app_preferences" => "偏好設定…".to_string(),
             "app_services" => "服務".to_string(),
             "app_hide" => "隱藏 Pourdown".to_string(),
             "app_hide_others" => "隱藏其他".to_string(),
@@ -281,6 +282,7 @@ fn get_label(lang: &str, key: &str) -> String {
             "file_export_html" => "Export as HTML...".to_string(),
             "file_export_pdf"  => "Export as PDF...".to_string(),
             "app_about" => "About Pourdown".to_string(),
+            "app_preferences" => "Preferences…".to_string(),
             "app_services" => "Services".to_string(),
             "app_hide" => "Hide Pourdown".to_string(),
             "app_hide_others" => "Hide Others".to_string(),
@@ -595,25 +597,49 @@ fn get_user_settings() -> Result<UserSettings, String> {
 /**
  * Save user language preference to persistent storage
  * This ensures language preference survives app restarts
+ *
+ * Also rebuilds the native menu in the new language and re-syncs the
+ * view_source_code checkmark — mirroring what the lang_en/lang_zh
+ * on_menu_event branches already do. Language can now be changed from two
+ * places: the native View > Language menu (which rebuilds itself) and the
+ * in-app Preferences dialog (which only calls this command) — without this,
+ * switching language from Preferences left the native menu bar stuck in the
+ * old language until restart.
  */
 #[tauri::command]
-fn save_language_preference(lang: String, state: State<AppState>) -> Result<(), String> {
+fn save_language_preference(app: AppHandle, lang: String, state: State<AppState>) -> Result<(), String> {
     let normalized_lang = normalize_language(&lang);
 
     // Load existing settings (to preserve other settings if any)
     let mut settings = UserSettings::load()?.unwrap_or_else(|| UserSettings { language: "en".to_string() });
-    
+
     // Update language
     settings.language = normalized_lang.clone();
-    
+
     // Save to file
     settings.save()?;
-    
+
     // Also update in-memory state
     let mut l = state.language.lock()
         .map_err(|_| "Failed to lock language state".to_string())?;
     *l = normalized_lang.clone();
-    
+    drop(l);
+
+    // Rebuild the native menu in the new language.
+    if let Ok(menu) = create_app_menu(&app, &normalized_lang) {
+        let _ = app.set_menu(menu);
+    }
+    // Re-sync view_source_code checkmark with current source_mode state
+    if let Ok(sm) = state.source_mode.lock() {
+        if let Some(menu) = app.menu() {
+            if let Some(item) = menu.get("view_source_code") {
+                if let Some(check_item) = item.as_check_menuitem() {
+                    let _ = check_item.set_checked(*sm);
+                }
+            }
+        }
+    }
+
     debug_log!("💾 Language preference saved and state updated to: {}", normalized_lang);
     Ok(())
 }
@@ -926,12 +952,15 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
     // macOS App Name Menu — the leftmost slot (app name is filled automatically by macOS)
     #[cfg(target_os = "macos")]
     {
+        let preferences_item = MenuItem::with_id(handle, "app_preferences", get_label(lang, "app_preferences"), true, Some("CmdOrCtrl+Comma"))?;
         let app_menu = Submenu::with_items(
             handle,
             "Pourdown",
             true,
             &[
                 &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata()))?,
+                &PredefinedMenuItem::separator(handle)?,
+                &preferences_item,
                 &PredefinedMenuItem::separator(handle)?,
                 &PredefinedMenuItem::services(handle, Some(&get_label(lang, "app_services")))?,
                 &PredefinedMenuItem::separator(handle)?,
@@ -1096,6 +1125,27 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
         Some("CmdOrCtrl+Alt+S"),
     )?;
 
+    // Preferences lives in the macOS app-name submenu above (platform
+    // convention); that submenu doesn't exist on Windows/Linux, so give it a
+    // home in the View menu there instead, keeping the same accelerator.
+    #[cfg(not(target_os = "macos"))]
+    let preferences_view_item = MenuItem::with_id(handle, "app_preferences", get_label(lang, "app_preferences"), true, Some("CmdOrCtrl+Comma"))?;
+
+    #[cfg(not(target_os = "macos"))]
+    let view_menu = Submenu::with_items(
+        handle,
+        get_label(lang, "view"),
+        true,
+        &[
+            &source_code_item,
+            &PredefinedMenuItem::separator(handle)?,
+            &theme_menu,
+            &language_menu,
+            &PredefinedMenuItem::separator(handle)?,
+            &preferences_view_item,
+        ],
+    )?;
+    #[cfg(target_os = "macos")]
     let view_menu = Submenu::with_items(
         handle,
         get_label(lang, "view"),
@@ -1233,6 +1283,8 @@ fn main() {
                 let _ = app.emit("menu-save-as", ());
             } else if event.id() == "file_close_document" {
                 let _ = app.emit("menu-close-document", ());
+            } else if event.id() == "app_preferences" {
+                let _ = app.emit("menu-open-preferences", ());
             } else if event.id() == "view_source_code" {
                 // Toggle source_mode state in AppState
                 let new_mode = if let Ok(mut sm) = app.state::<AppState>().source_mode.lock() {
