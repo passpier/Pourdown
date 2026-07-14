@@ -20,7 +20,7 @@
 ## Demo
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/84ff8e73-6e1d-4282-a01f-473c65c1553d" controls width="720"></video>
+  <video src="https://github.com/user-attachments/assets/cfbccf50-29d1-4899-8539-f600cce6cd5d" controls width="720"></video>
 </p>
 
 <p align="center"><em>Importing a PDF and getting editable Markdown back in one click.</em></p>
