@@ -35,6 +35,9 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "msi", "nsis"],
+    "resources": {
+      "resources/pdfium-x64.dll": "pdfium.dll"
+    },
     "fileAssociations": [
       {
         "ext": ["md"],

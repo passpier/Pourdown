@@ -97,9 +97,20 @@ fn pdfium_lib_path() -> PathBuf {
 
         #[cfg(target_os = "windows")]
         {
-            let dll = dir.join("pdfium.dll");
-            if dll.exists() {
-                return dll;
+            // Bundled name is "pdfium.dll" (see tauri.conf.json
+            // bundle.resources), but also accept the unrenamed
+            // architecture-specific filenames and a "resources/" subdir, so
+            // this doesn't depend on the exact layout the NSIS/MSI bundler
+            // produces.
+            for name in ["pdfium.dll", "pdfium-x64.dll", "pdfium-arm64.dll"] {
+                let beside = dir.join(name);
+                if beside.exists() {
+                    return beside;
+                }
+                let in_resources = dir.join("resources").join(name);
+                if in_resources.exists() {
+                    return in_resources;
+                }
             }
         }
 
