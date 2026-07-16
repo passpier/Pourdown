@@ -89,12 +89,21 @@ jobs:
       - name: Stub frontendDist for tauri::generate_context!
         run: mkdir -p dist && echo '<html></html>' > dist/index.html
 
-      # No PDFium setup step needed: `test_pdf_to_markdown_fixture` in
-      # src-tauri/src/convert/pdf.rs looks for the vendored macOS
-      # framework at src-tauri/frameworks/pdfium.framework/pdfium and
-      # gracefully skips (with an eprintln) when it isn't loadable, so
-      # `cargo test` stays green on this ubuntu runner. Every other
-      # converter's tests (docx/xlsx/pptx) run unconditionally.
+      # tauri-build validates every `bundle.resources` path in tauri.conf.json
+      # at compile time (for cargo test/clippy too), but the PDFium DLLs are
+      # fetched, not committed (see scripts/fetch-pdfium.mjs / CLAUDE.md's
+      # PDFium note), and this Linux job never fetches them (the fetch script
+      # refuses to run without a mac/windows --target). Empty stubs satisfy
+      # the path check; `test_pdf_to_markdown_fixture` in
+      # src-tauri/src/convert/pdf.rs looks for the vendored macOS framework
+      # and gracefully skips (with an eprintln) when it isn't loadable, so
+      # the stubs' contents are never actually read on this runner. Every
+      # other converter's tests (docx/xlsx/pptx) run unconditionally.
+      - name: Stub PDFium bundle resources for tauri-build
+        run: |
+          mkdir -p src-tauri/resources
+          touch src-tauri/resources/pdfium-x64.dll src-tauri/resources/pdfium-arm64.dll
+
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --all-targets
