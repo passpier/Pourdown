@@ -34,6 +34,16 @@ interface EditorProps {
   documentId: string;
 }
 
+/**
+ * Splits a path on both `/` and `\` so this works for Windows paths too.
+ * Mirrors the identical helper in `documentStore.ts`.
+ */
+function dirname(path: string): string {
+  const parts = path.split(/[/\\]/);
+  parts.pop();
+  return parts.join('/');
+}
+
 export const Editor = memo(function Editor({ documentId }: EditorProps) {
   const documents = useDocumentStore((state) => state.documents);
   const updateContent = useDocumentStore((state) => state.updateContent);
@@ -66,8 +76,19 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
   // Read synchronously during render (not in an effect) so it's guaranteed to
   // be current before the content-sync effect below calls setContent — that's
   // when CustomImage's renderHTML resolves image `src`s against this dir.
+  //
+  // `document.assetDir` is only set for an imported document that hasn't been
+  // saved yet (it's cleared to null by `saveDocument` once media is relocated
+  // next to the `.md` — see documentStore.ts). Once that happens, or for any
+  // document loaded from disk, relative image paths (`<name>.assets/...`)
+  // must be resolved against the document's own directory instead — that's
+  // also just standard markdown convention (image paths are relative to the
+  // file). Falling back here (rather than repointing `assetDir` itself at the
+  // saved directory) keeps `assetDir`'s other meaning intact: `closeDocument`
+  // treats a non-null `assetDir` as an orphaned staging dir to delete via
+  // `discard_media`, so it must never end up holding the real document folder.
   const assetDirRef = useRef<string | null>(null);
-  assetDirRef.current = document?.assetDir ?? null;
+  assetDirRef.current = document?.assetDir ?? (document?.path ? dirname(document.path) : null);
 
   // Create lowlight instance with a smaller default language set
   // 'common' covers popular languages while keeping bundle size smaller
