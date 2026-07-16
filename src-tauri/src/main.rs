@@ -928,12 +928,17 @@ fn queue_open_files(app: &AppHandle, paths: Vec<String>) {
 }
 
 // App metadata shown in the native About panel (macOS app menu, Help menu on
-// Windows/Linux). Version is read from Cargo.toml at compile time so it never
-// drifts from the crate's own version field.
-fn about_metadata<'a>() -> AboutMetadata<'a> {
+// Windows/Linux). Version is passed in from the caller's runtime
+// `PackageInfo` (derived from tauri.conf.json) rather than read via
+// `env!("CARGO_PKG_VERSION")` at compile time — that read Cargo.toml, a
+// second, independent version source from the one that actually produces the
+// bundle (Info.plist / installer / frontend getVersion()), so the two could
+// drift. Sourcing from PackageInfo ties the About version to the same value
+// baked into the shipped app.
+fn about_metadata<'a>(version: &str) -> AboutMetadata<'a> {
     AboutMetadataBuilder::new()
         .name(Some("Pourdown"))
-        .version(Some(env!("CARGO_PKG_VERSION").to_string()))
+        .version(Some(version.to_string()))
         .authors(Some(vec!["passpier".into()]))
         .comments(Some("Turn any document into clean, editable Markdown."))
         .copyright(Some("© 2026 passpier · MIT License"))
@@ -945,6 +950,9 @@ fn about_metadata<'a>() -> AboutMetadata<'a> {
 
 fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> tauri::Result<Menu<R>> {
     let menu = Menu::new(handle)?;
+    // Same version the bundler stamps into Info.plist / the installer, so the
+    // About panel can't disagree with the app it's shown in.
+    let pkg_version = handle.package_info().version.to_string();
 
     // macOS App Name Menu — the leftmost slot (app name is filled automatically by macOS)
     #[cfg(target_os = "macos")]
@@ -955,7 +963,7 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
             "Pourdown",
             true,
             &[
-                &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata()))?,
+                &PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata(&pkg_version)))?,
                 &PredefinedMenuItem::separator(handle)?,
                 &preferences_item,
                 &PredefinedMenuItem::separator(handle)?,
@@ -1179,7 +1187,7 @@ fn create_app_menu<R: tauri::Runtime>(handle: &AppHandle<R>, lang: &str) -> taur
         handle,
         get_label(lang, "help"),
         true,
-        &[&PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata()))?],
+        &[&PredefinedMenuItem::about(handle, Some(&get_label(lang, "app_about")), Some(about_metadata(&pkg_version)))?],
     )?;
     #[cfg(target_os = "macos")]
     let help_menu = Submenu::with_items(
