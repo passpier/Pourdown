@@ -1271,6 +1271,34 @@ fn main() {
                 }
             }
 
+            // Point the pdfium loader at the bundled DLL via Tauri's resource
+            // resolver, rather than letting it guess a path beside the exe
+            // (see convert::pdf::pdfium_lib_path) — the guess was the source
+            // of the Windows-only "failed to load pdfium" bug, since the
+            // bundler's actual resource layout was never guaranteed to match
+            // any of the guessed locations. No-op on macOS, where the
+            // resolved path won't exist (macOS ships a .framework, not a
+            // DLL) and the existing framework-relative path keeps serving.
+            #[cfg(target_os = "windows")]
+            {
+                #[cfg(target_arch = "aarch64")]
+                let dll_name = "pdfium-arm64.dll";
+                #[cfg(not(target_arch = "aarch64"))]
+                let dll_name = "pdfium-x64.dll";
+
+                match app
+                    .path()
+                    .resolve(dll_name, tauri::path::BaseDirectory::Resource)
+                {
+                    Ok(p) if p.exists() => convert::pdf::set_pdfium_lib_path(p),
+                    Ok(p) => eprintln!(
+                        "[pdfium] resource resolved but missing on disk: {:?}",
+                        p
+                    ),
+                    Err(e) => eprintln!("[pdfium] failed to resolve resource path: {e}"),
+                }
+            }
+
             Ok(())
         })
         .menu(move |handle| {

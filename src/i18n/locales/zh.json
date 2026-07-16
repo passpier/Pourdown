@@ -7,7 +7,8 @@
     "create_or_open": "建立新文件或開啟現有文件",
     "toggle_sidebar": "切換側邊欄",
     "markdown_editor": "Pourdown",
-    "char_count": "{{n}} 字元"
+    "char_count": "{{n}} 字元",
+    "close": "關閉"
   },
   "dragDrop": {
     "overlay": "放開以開啟檔案"

@@ -7,7 +7,8 @@
     "create_or_open": "Create a new document or open an existing one",
     "toggle_sidebar": "Toggle sidebar",
     "markdown_editor": "Pourdown",
-    "char_count": "{{n}} chars"
+    "char_count": "{{n}} chars",
+    "close": "Close"
   },
   "dragDrop": {
     "overlay": "Drop to open"

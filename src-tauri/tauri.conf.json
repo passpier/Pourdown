@@ -36,7 +36,8 @@
     "active": true,
     "targets": ["dmg", "msi", "nsis"],
     "resources": {
-      "resources/pdfium-x64.dll": "pdfium.dll"
+      "resources/pdfium-x64.dll": "pdfium-x64.dll",
+      "resources/pdfium-arm64.dll": "pdfium-arm64.dll"
     },
     "fileAssociations": [
       {

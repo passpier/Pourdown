@@ -259,13 +259,15 @@ function App() {
       setTimeout(() => setImportExportStatus(null), 3000);
     } catch (err) {
       console.error('Import failed:', err);
+      // Left on screen until manually dismissed (see the toast's close
+      // button) rather than auto-clearing, so the real backend message
+      // (e.g. a pdfium load diagnostic on Windows) stays readable/copyable.
       setImportExportStatus({
         type: 'import',
         format,
         state: 'error',
         message: String(err),
       });
-      setTimeout(() => setImportExportStatus(null), 6000);
     }
   }, []);
 
@@ -401,13 +403,13 @@ function App() {
       setTimeout(() => setImportExportStatus(null), 3000);
     } catch (err) {
       console.error('Export failed:', err);
+      // Left on screen until manually dismissed — see runImport's catch.
       setImportExportStatus({
         type: 'export',
         format,
         state: 'error',
         message: String(err),
       });
-      setTimeout(() => setImportExportStatus(null), 6000);
     }
   }, []);
 
@@ -820,7 +822,9 @@ function App() {
       </div>
       {/* Import/Export status toast */}
       {importExportStatus && (
-        <div className={`fixed bottom-4 right-4 z-50 rounded-lg px-4 py-3 text-sm shadow-lg max-w-sm ${
+        <div className={`fixed bottom-4 right-4 z-50 rounded-lg px-4 py-3 text-sm shadow-lg ${
+          importExportStatus.state === 'error' ? 'max-w-lg' : 'max-w-sm'
+        } ${
           importExportStatus.state === 'loading'
             ? 'bg-muted text-muted-foreground'
             : importExportStatus.state === 'success'
@@ -843,7 +847,24 @@ function App() {
             </span>
           )}
           {importExportStatus.state === 'error' && (
-            <span>{t('import_export.error_generic')}</span>
+            <div className="flex items-start gap-2">
+              {/* The raw backend message (e.g. the pdfium load diagnostic on
+                  Windows) is shown in full and left on screen until manually
+                  dismissed, since it's the only way a user on a production
+                  build can read/copy the actual failure cause without
+                  devtools — see CLAUDE.md's PDF Windows-loader notes. */}
+              <pre className="max-h-64 flex-1 overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs select-text">
+                {importExportStatus.message || t('import_export.error_generic')}
+              </pre>
+              <button
+                type="button"
+                onClick={() => setImportExportStatus(null)}
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+                aria-label={t('common.close')}
+              >
+                ×
+              </button>
+            </div>
           )}
         </div>
       )}

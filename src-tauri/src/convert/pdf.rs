@@ -1,14 +1,34 @@
 use markdown2pdf::config::ConfigSource;
 use pdfium_render::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use super::media::MediaSink;
 use super::ConversionError;
 
 // Guards the one-time initialization of the global pdfium bindings.
 static PDFIUM_INIT: Mutex<bool> = Mutex::new(false);
+
+/// Absolute path to the bundled pdfium library, resolved once at startup by
+/// `main`'s `.setup()` via Tauri's resource resolver (see `set_pdfium_lib_path`
+/// below). Preferred over the exe-relative guesses in `pdfium_lib_path`
+/// because it's tied to where the bundler actually placed the DLL rather than
+/// guessing beside the exe — the guesses stayed fragile on Windows because
+/// the loader and `tauri.conf.json`'s `bundle.resources` layout weren't
+/// actually tied together. A plain `OnceLock` (not `env::set_var`, which is
+/// `unsafe` as of the Rust 2024 edition and racy against concurrent reads) is
+/// the right fit: written once from `setup()`, read lock-free on the
+/// `spawn_blocking` conversion thread.
+static PDFIUM_RESOLVED_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Records the resource-resolved pdfium path. Called once from `main`'s
+/// `.setup()`; a second call is a no-op (first value wins). Only called on
+/// Windows today (see main.rs), hence the `allow` on other targets.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn set_pdfium_lib_path(path: PathBuf) {
+    let _ = PDFIUM_RESOLVED_PATH.set(path);
+}
 
 /// Convert Markdown to a PDF file.
 pub fn markdown_to_pdf(markdown: &str, path: &str) -> Result<(), ConversionError> {
@@ -25,9 +45,8 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
             .map_err(|_| ConversionError("Pdfium init lock poisoned".to_string()))?;
         if !*initialized {
             let lib = pdfium_lib_path();
-            let bindings = Pdfium::bind_to_library(&lib).map_err(|e| {
-                ConversionError(format!("Failed to load pdfium library at {:?}: {}", lib, e))
-            })?;
+            let bindings = Pdfium::bind_to_library(&lib)
+                .map_err(|e| ConversionError(pdfium_load_diagnostics(&lib, &e)))?;
             Pdfium::new(bindings);
             *initialized = true;
         }
@@ -68,63 +87,110 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
     Ok(md)
 }
 
-/// Returns the path to the pdfium dynamic library at runtime.
-fn pdfium_lib_path() -> PathBuf {
+/// Every path pdfium resolution would consider, in priority order. Shared by
+/// `pdfium_lib_path` (which picks the first that exists) and
+/// `pdfium_load_diagnostics` (which reports the full list plus which one
+/// existed on disk, since a Windows load failure needs that context to
+/// distinguish "wrong path" from "right path, missing dependency").
+fn pdfium_candidate_paths() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
     // Developer or CI override
     if let Ok(p) = std::env::var("PDFIUM_LIBRARY_PATH") {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return path;
-        }
+        candidates.push(PathBuf::from(p));
+    }
+
+    // Resolved from Tauri's resource dir at startup (see set_pdfium_lib_path)
+    if let Some(p) = PDFIUM_RESOLVED_PATH.get() {
+        candidates.push(p.clone());
     }
 
     if let Ok(exe) = std::env::current_exe() {
-        let dir = exe.parent().unwrap_or(std::path::Path::new("."));
+        let dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
 
         #[cfg(target_os = "macos")]
         {
             // macOS app bundle: MacOS/ -> ../Frameworks/pdfium.framework/pdfium
-            let bundled = dir.join("../Frameworks/pdfium.framework/pdfium");
-            if bundled.exists() {
-                return bundled;
-            }
+            candidates.push(dir.join("../Frameworks/pdfium.framework/pdfium"));
             // Dev build: look for libpdfium.dylib placed beside the binary
-            let beside = dir.join("libpdfium.dylib");
-            if beside.exists() {
-                return beside;
-            }
+            candidates.push(dir.join("libpdfium.dylib"));
         }
 
         #[cfg(target_os = "windows")]
         {
-            // Bundled name is "pdfium.dll" (see tauri.conf.json
-            // bundle.resources), but also accept the unrenamed
-            // architecture-specific filenames and a "resources/" subdir, so
-            // this doesn't depend on the exact layout the NSIS/MSI bundler
-            // produces.
-            for name in ["pdfium.dll", "pdfium-x64.dll", "pdfium-arm64.dll"] {
-                let beside = dir.join(name);
-                if beside.exists() {
-                    return beside;
-                }
-                let in_resources = dir.join("resources").join(name);
-                if in_resources.exists() {
-                    return in_resources;
-                }
+            // Bundled names are arch-specific (see tauri.conf.json
+            // bundle.resources), but also accept the legacy shared name and a
+            // "resources/" subdir, so this doesn't depend on the exact layout
+            // the NSIS/MSI bundler produces.
+            for name in ["pdfium-x64.dll", "pdfium-arm64.dll", "pdfium.dll"] {
+                candidates.push(dir.join(name));
+                candidates.push(dir.join("resources").join(name));
             }
         }
 
         #[cfg(target_os = "linux")]
         {
-            let so = dir.join("libpdfium.so");
-            if so.exists() {
-                return so;
-            }
+            candidates.push(dir.join("libpdfium.so"));
         }
     }
 
     // Fall back to platform library name in the current working directory
-    PathBuf::from(Pdfium::pdfium_platform_library_name())
+    candidates.push(PathBuf::from(Pdfium::pdfium_platform_library_name()));
+
+    candidates
+}
+
+/// Returns the path to the pdfium dynamic library at runtime: the first
+/// candidate from `pdfium_candidate_paths` that exists on disk, or the last
+/// (bare platform-name) fallback if none do.
+fn pdfium_lib_path() -> PathBuf {
+    let candidates = pdfium_candidate_paths();
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| candidates.last().cloned().unwrap())
+}
+
+/// Builds a rich, user-readable failure report for a pdfium load error. Only
+/// runs on the error path (bind_to_library already failed), so it's free to
+/// stat every candidate — zero cost on the success path. Distinguishes
+/// "DLL not found" from "DLL found but failed to load" (a missing MSVC
+/// runtime dependency on Windows surfaces as the *same* error 126 text as a
+/// missing file, so the disambiguation has to come from Rust's own
+/// `.exists()` check, not from the raw error message).
+fn pdfium_load_diagnostics(attempted: &Path, err: &PdfiumError) -> String {
+    let attempted_exists = attempted.exists();
+    let raw = err.to_string();
+
+    let mut report = String::new();
+    report.push_str("Failed to load the pdfium library.\n");
+    report.push_str(&format!(
+        "Attempted: {:?} (exists: {})\n",
+        attempted, attempted_exists
+    ));
+    report.push_str(&format!(
+        "current_exe: {}\n",
+        std::env::current_exe()
+            .map(|p| format!("{:?}", p))
+            .unwrap_or_else(|_| "<unavailable>".to_string())
+    ));
+    report.push_str("Candidates tried:\n");
+    for c in pdfium_candidate_paths() {
+        report.push_str(&format!("  - {:?} (exists: {})\n", c, c.exists()));
+    }
+    report.push_str(&format!("Raw error: {}\n", raw));
+
+    let hint = if !attempted_exists {
+        "Hint: the pdfium library was not found at the resolved path — this looks like a bundling/resource issue."
+    } else if raw.contains("193") || raw.to_lowercase().contains("not a valid win32 application") {
+        "Hint: the pdfium library exists but is the wrong architecture (e.g. an x64 DLL on ARM64, or vice versa)."
+    } else {
+        "Hint: the pdfium library exists but failed to load; a dependency is likely missing — install the Microsoft Visual C++ Redistributable (VCRUNTIME140.dll)."
+    };
+    report.push_str(hint);
+
+    report
 }
 
 /// True if `text` contains a run of at least 4 dots (a TOC "dot leader"),
@@ -1890,6 +1956,30 @@ mod tests {
         assert_eq!(escape_table_cell("a|b"), "a\\|b");
         assert_eq!(escape_table_cell("back\\slash"), "back\\\\slash");
         assert_eq!(escape_table_cell("line1\nline2"), "line1<br>line2");
+    }
+
+    #[test]
+    fn test_pdfium_lib_path_honors_env_override() {
+        // A real, existing file so pdfium_lib_path's `.exists()` check passes
+        // and it's picked ahead of every other candidate.
+        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        std::env::set_var("PDFIUM_LIBRARY_PATH", &lib);
+        assert_eq!(pdfium_lib_path(), lib);
+        std::env::remove_var("PDFIUM_LIBRARY_PATH");
+    }
+
+    #[test]
+    fn test_pdfium_candidate_paths_includes_resolved_static() {
+        // set_pdfium_lib_path (called from main.rs's setup() on Windows) must
+        // land in the candidate list, since pdfium_load_diagnostics reports
+        // this list verbatim and pdfium_lib_path relies on it being tried
+        // before the exe-relative guesses. PDFIUM_RESOLVED_PATH is a
+        // process-global OnceLock, so this only asserts presence rather than
+        // list position/uniqueness, to stay robust if another test in this
+        // binary sets it first.
+        let resolved = PathBuf::from("/tmp/pourdown-test-resolved-pdfium.dll");
+        set_pdfium_lib_path(resolved.clone());
+        assert!(pdfium_candidate_paths().contains(&resolved));
     }
 
     /// End-to-end regression test against `tests/fixtures/sample.pdf`
