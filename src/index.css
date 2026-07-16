@@ -334,6 +334,16 @@
   color: hsl(var(--link-hover));
 }
 
+/* Only hint "clickable" while Cmd (macOS) / Ctrl (Windows) is held — that's
+   the modifier that actually opens the link (see Editor.tsx's `mod-held`
+   class toggle + LinkClickPlugin). A plain click keeps the text I-beam so it
+   doesn't misleadingly suggest a plain click will navigate. */
+.tiptap.mod-held a:hover {
+  cursor: pointer;
+  color: hsl(var(--link-hover));
+  text-decoration-thickness: 2px;
+}
+
 .tiptap a:visited {
   color: hsl(var(--link-visited));
 }

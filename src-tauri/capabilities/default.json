@@ -33,6 +33,8 @@
     "allow-set-language",
     "allow-get-user-settings",
     "allow-save-language-preference",
-    "allow-search-in-files"
+    "allow-search-in-files",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }

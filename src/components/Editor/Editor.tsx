@@ -1,7 +1,10 @@
 import { useEditor, EditorContent, ReactNodeViewRenderer } from '@tiptap/react';
+import { Extension } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { MarkdownSerializerState } from '@tiptap/pm/markdown';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { createLowlight, common } from 'lowlight';
@@ -163,6 +166,57 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       },
     }), []);
 
+  // Links render normally but `Link` is configured with `openOnClick: false`
+  // (see markdownExtensions.ts) — a plain click inside a Tauri webview would
+  // navigate the whole app window, not open a browser tab. Instead, only a
+  // Cmd (macOS) / Ctrl (Windows) + click opens the link, matching the
+  // modifier-click convention in VS Code/Obsidian/Typora; a plain click keeps
+  // placing the caret so link text stays editable. Only http(s)/mailto are
+  // forwarded to the OS — imported/pasted markdown is untrusted, and
+  // in-document anchors or relative links have no meaningful desktop target.
+  //
+  // Implemented as a `handleDOMEvents.click` ProseMirror plugin — the same
+  // pattern `FootnoteClickPlugin` (src/extensions/footnotes.ts) already uses
+  // for its ref/backref navigation — rather than `editorProps.handleClick`.
+  // `handleClick` is PM's synthesized "clean click" callback (gated on
+  // posAtCoords/no-drag/selection interplay) and didn't reliably fire for a
+  // modifier-click on an inline mark; `handleDOMEvents.click` is a direct
+  // passthrough of the native event and modifiers, matching the footnote
+  // handler that's proven to work here.
+  const LinkClickPlugin = useMemo(() => Extension.create({
+    name: 'linkClickHandler',
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: new PluginKey('linkClickHandler'),
+          props: {
+            handleDOMEvents: {
+              click(_view, event) {
+                if (!event.metaKey && !event.ctrlKey) return false;
+                const target = event.target as HTMLElement | null;
+                const anchor = target?.closest('a[href]');
+                const href = anchor?.getAttribute('href');
+                if (!href) return false;
+
+                let scheme: string;
+                try {
+                  scheme = new URL(href).protocol;
+                } catch {
+                  return false;
+                }
+                if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'mailto:') return false;
+
+                event.preventDefault();
+                openUrl(href).catch((err) => console.error('Failed to open link:', err));
+                return true;
+              },
+            },
+          },
+        }),
+      ];
+    },
+  }), []);
+
   const editor = useEditor({
     extensions: [
       ...createMarkdownExtensions({
@@ -177,6 +231,7 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
       }),
       CustomImage,
       SearchExtension,
+      LinkClickPlugin,
     ],
     content: document?.content || '',
     editorProps: {
@@ -424,6 +479,42 @@ export const Editor = memo(function Editor({ documentId }: EditorProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Toggle a `mod-held` class on the editor DOM while Cmd (macOS) / Ctrl
+  // (Windows) is held, so the CSS in index.css (`.tiptap.mod-held a:hover`)
+  // only shows a pointer cursor over links while the modifier that actually
+  // opens them is down — an honest hover affordance for the click handled by
+  // `LinkClickPlugin` above, rather than implying a plain click opens links.
+  // `blur`/`visibilitychange` are safety nets: releasing the modifier while
+  // this window isn't focused (e.g. switching apps with Cmd still down)
+  // never fires `keyup` here, so the class would otherwise get stuck on.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const win = window;
+    const doc = win.document;
+
+    const setModHeld = (held: boolean) => dom.classList.toggle('mod-held', held);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Meta' || e.key === 'Control') setModHeld(true);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Meta' || e.key === 'Control') setModHeld(false);
+    };
+    const reset = () => setModHeld(false);
+
+    win.addEventListener('keydown', onKeyDown);
+    win.addEventListener('keyup', onKeyUp);
+    win.addEventListener('blur', reset);
+    doc.addEventListener('visibilitychange', reset);
+    return () => {
+      win.removeEventListener('keydown', onKeyDown);
+      win.removeEventListener('keyup', onKeyUp);
+      win.removeEventListener('blur', reset);
+      doc.removeEventListener('visibilitychange', reset);
+      dom.classList.remove('mod-held');
+    };
+  }, [editor]);
 
   // Apply font size and responsive layout. Font-family is theme-driven via
   // the --font-body CSS var (see index.css .tiptap), not set inline here.
