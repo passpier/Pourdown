@@ -35,7 +35,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -184,6 +184,11 @@ async function fetchTarget(name) {
   console.log(`  symbol check passed: exports ${REQUIRED_SYMBOL}`);
 
   const destPath = t.destination;
+  // The destination dir may not exist on a fresh checkout: these DLL/dylib
+  // paths are gitignored (see .gitignore's PDFium comment), and git doesn't
+  // track empty directories, so `src-tauri/resources/` in particular is
+  // simply absent until something creates it.
+  mkdirSync(path.dirname(destPath), { recursive: true });
   writeFileSync(destPath, binary);
   chmodSync(destPath, 0o755);
   console.log(`  wrote ${destPath} (${binary.length} bytes)`);
