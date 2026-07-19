@@ -29,7 +29,8 @@
     "parent_directory": "返回上層資料夾"
   },
   "editor": {
-    "placeholder": "在這裡輸入 Markdown..."
+    "placeholder": "在這裡輸入 Markdown...",
+    "rich_view_failed": "視覺化編輯器載入此文件失敗，已改為顯示原始 Markdown。"
   },
   "toolbar": {
     "normal": "本文",

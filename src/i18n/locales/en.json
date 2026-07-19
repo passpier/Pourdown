@@ -29,7 +29,8 @@
     "parent_directory": "Go to parent directory"
   },
   "editor": {
-    "placeholder": "Type your markdown here..."
+    "placeholder": "Type your markdown here...",
+    "rich_view_failed": "Rich view failed to load this document — showing raw Markdown instead."
   },
   "toolbar": {
     "normal": "Normal",

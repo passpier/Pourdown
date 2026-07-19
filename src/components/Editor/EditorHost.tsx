@@ -1,8 +1,9 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileText } from 'lucide-react';
 import { Editor } from './Editor';
 import { SourceEditor } from './SourceEditor';
+import { EditorErrorBoundary } from './EditorErrorBoundary';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStore } from '@/stores/uiStore';
 
@@ -27,6 +28,12 @@ const KEEP_ALIVE_MAX = 8;
  * into ProseMirror and re-mounting a React node view for every code/math/HTML
  * block. Keeping instances alive removes that cost for every switch after the
  * first visit to a tab.
+ *
+ * Each pair is wrapped in its own `EditorErrorBoundary` (see that file's doc
+ * comment): keeping every visited document's editor mounted means a document
+ * whose content crashes Tiptap's parse now does so as soon as it's *opened*,
+ * even in a background tab, not just when active — the boundary contains
+ * that to the one document's pane instead of blanking the whole app.
  */
 export const EditorHost = memo(function EditorHost() {
   const { t } = useTranslation();
@@ -66,6 +73,20 @@ export const EditorHost = memo(function EditorHost() {
     });
   }, [documentIdsKey, activeDocumentId]);
 
+  // `keptIds` is only updated by the effect above, which runs *after* the
+  // render where `activeDocumentId` changes to a document not yet in the
+  // list (e.g. every document opened via the `Promise.all` multi-file path
+  // in App.tsx). Rendering raw `keptIds` on that render would give every
+  // pane below `hidden={id !== activeDocumentId}` — none of them the active
+  // id — i.e. a one-frame fully blank editor area, repeated once per file in
+  // a multi-file open. Unioning in `activeDocumentId` here (render time, not
+  // state) guarantees the active document always has a rendered pane even
+  // before the LRU effect catches up on the next commit.
+  const renderIds = useMemo(() => {
+    if (!activeDocumentId || keptIds.includes(activeDocumentId)) return keptIds;
+    return [...keptIds, activeDocumentId];
+  }, [keptIds, activeDocumentId]);
+
   if (!activeDocumentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -80,10 +101,18 @@ export const EditorHost = memo(function EditorHost() {
 
   return (
     <div className="flex-1 overflow-hidden">
-      {keptIds.map((id) => (
+      {renderIds.map((id) => (
         <div key={id} className="h-full w-full" hidden={id !== activeDocumentId}>
-          <Editor documentId={id} active={id === activeDocumentId && editorMode === 'wysiwyg'} />
-          <SourceEditor documentId={id} active={id === activeDocumentId && editorMode === 'source'} />
+          {/* Both siblings share one boundary (rather than wrapping just
+              `<Editor>`) so a crash swaps them both out for the fallback's
+              single forced-active `SourceEditor` — wrapping only `<Editor>`
+              would leave this real `<SourceEditor>` free to also go active
+              if the user later toggles the global mode to 'source', stacking
+              two live textareas for the same document in one pane. */}
+          <EditorErrorBoundary documentId={id}>
+            <Editor documentId={id} active={id === activeDocumentId && editorMode === 'wysiwyg'} />
+            <SourceEditor documentId={id} active={id === activeDocumentId && editorMode === 'source'} />
+          </EditorErrorBoundary>
         </div>
       ))}
     </div>
