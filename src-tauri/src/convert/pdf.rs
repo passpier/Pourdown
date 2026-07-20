@@ -243,8 +243,34 @@ fn contains_dot_leader(text: &str) -> bool {
     false
 }
 
-/// Returns true for short lines that are all-uppercase (or CJK-only) with no sentence ending.
-/// Used as a fallback heading detector when all text in the PDF has the same font size.
+/// Minimum number of ASCII letters an all-caps candidate must contain.
+/// Guards against short equation/table fragments like "QK T" or "G D" that
+/// otherwise pass every other gate (no lowercase, no sentence punctuation,
+/// alphabetic content present) purely because they happen to be short and
+/// upper-case.
+const ALL_CAPS_MIN_LETTERS: usize = 4;
+
+/// Minimum fraction of a candidate's non-space characters that must be ASCII
+/// letters. Guards against lines that are mostly numbers/symbols with a
+/// scattered upper-case letter or two, e.g. a table row like
+/// "GNMT + RL [38] 24.6 39.92" (letter ratio ~0.3) — a real heading is
+/// overwhelmingly letters.
+const ALL_CAPS_MIN_LETTER_RATIO: f32 = 0.6;
+
+/// Returns true for short, genuinely-Latin-all-caps lines with no sentence
+/// ending — a fallback heading detector for pages where every run shares the
+/// same font size (so the font-ratio classifier can't distinguish a heading).
+///
+/// Requires at least one ASCII uppercase letter, which is what actually makes
+/// this "all-CAPS": text with no case distinction at all (CJK, for instance)
+/// vacuously satisfies "zero lowercase letters" and would otherwise match
+/// every short, unpunctuated line in the document — flooding a CJK-heavy
+/// document (e.g. a résumé) with false headings, since CJK simply has no
+/// letter case to be "capped". The added letter-count and letter-ratio gates
+/// further keep short equation/table fragments (`QK T`, `O (1) O (1)`,
+/// `(A) 4 128 128`, a `GNMT + RL [38] 24.6 39.92` table row) from qualifying —
+/// they're short on letters or heavy on symbols/digits, unlike a real
+/// ALL-CAPS section title (`ABSTRACT`, `INDEX TERMS`).
 fn is_all_caps_heading(text: &str) -> bool {
     let char_count = text.chars().count();
     // Length guard: too short or too long to be a section heading
@@ -266,7 +292,20 @@ fn is_all_caps_heading(text: &str) -> bool {
     }
     // Must contain at least some alphabetic content
     let alpha_count = text.chars().filter(|c| c.is_alphabetic()).count();
-    alpha_count > 0
+    if alpha_count == 0 {
+        return false;
+    }
+    // Must be genuinely Latin-cased, not just case-insensitive (CJK etc).
+    let has_upper = text.chars().any(|c| c.is_ascii_uppercase());
+    if !has_upper {
+        return false;
+    }
+    let ascii_letter_count = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    if ascii_letter_count < ALL_CAPS_MIN_LETTERS {
+        return false;
+    }
+    let non_space_count = text.chars().filter(|c| !c.is_whitespace()).count().max(1);
+    (ascii_letter_count as f32 / non_space_count as f32) >= ALL_CAPS_MIN_LETTER_RATIO
 }
 
 #[derive(Clone)]
@@ -450,6 +489,102 @@ fn starts_with_section_number(text: &str) -> bool {
         return false;
     }
     t[prefix_len..].is_empty() || t[prefix_len..].starts_with(char::is_whitespace)
+}
+
+/// Math/Greek symbols that disqualify a numbered-prefix line from being a
+/// section-heading title (see [`numbered_heading_level`]) — their presence
+/// means the line is an inlined equation or formula fragment (e.g. GAN's
+/// "4.1 Global Optimality of p g = p data", Attention's stray
+/// "1 X m h ∇ θ d log D x m i =1 end for"), not prose. Deliberately a curated
+/// symbol set rather than "any non-letter" — a title can still contain
+/// ordinary punctuation like colons, hyphens, or parentheses.
+const HEADING_TITLE_REJECT_SYMBOLS: &[char] = &[
+    '=', '∇', '∼', '∈', '×', '√', '·', '∗', '∞', '≤', '≥', '−', '±', '∑', '∏', '∂', '∫',
+];
+
+/// Above this fraction of whitespace-separated tokens being a single
+/// character, a numbered-prefix line's title is treated as an equation
+/// fragment rather than a heading (see [`numbered_heading_level`]) — ordinary
+/// section titles are mostly multi-character words, while inlined math
+/// (`"1 X m h ∇ θ d log D x m i =1 end for"`) is mostly lone symbols/letters.
+const HEADING_TITLE_MAX_SINGLE_CHAR_TOKEN_FRACTION: f32 = 0.4;
+
+/// True if any character in `c` is in the Greek and Coptic Unicode block
+/// (U+0370–U+03FF) — math variable names like `θ`, `β`, `α` that mark a line
+/// as an equation fragment rather than heading prose.
+fn contains_greek(text: &str) -> bool {
+    text.chars().any(|c| ('\u{0370}'..='\u{03FF}').contains(&c))
+}
+
+/// Returns the Markdown heading prefix (`"## "`, `"### "`, `"#### "`, …) for
+/// `text` if it is a numbered section heading like "3.2 Attention" or
+/// "3.2.1 Scaled Dot-Product Attention", or `None` otherwise.
+///
+/// This exists because many real headings — especially subsection headings —
+/// are typeset in the *same* font size as body text (only bold), so the
+/// font-size-ratio classifier in `render_region` can never see them: it has
+/// no signal to work with. A numbered prefix followed by a Title-Case,
+/// non-mathematical run of words is a strong, font-size-independent signal
+/// that the line is a heading, and its depth (number of dot-separated numeric
+/// components: "1" -> 1, "3.1" -> 2, "3.2.1" -> 3) gives a natural nesting
+/// level — more reliable than incidental font size for this shape of line.
+///
+/// Guards, in order:
+/// - [`starts_with_section_number`] must hold (numeric prefix + trailing
+///   whitespace/EOL) — already rejects dates ("2024-07-26") and reference
+///   markers ("[1]").
+/// - The remainder after the prefix (the "title") must be non-empty — drops
+///   bare page/table numbers like "705" or an equation label like "(1)".
+/// - The title's first character must be an ASCII uppercase letter — the
+///   Title-Case convention real section headings follow, which drops
+///   duration fragments ("3 年" -> "年" is not uppercase ASCII) and
+///   CJK-led lines (not Latin-cased, so not ASCII-uppercase either).
+/// - The title must contain no [`HEADING_TITLE_REJECT_SYMBOLS`] and no Greek
+///   letters ([`contains_greek`]) — drops inlined equations.
+/// - The title's single-character-token fraction must be
+///   ≤ [`HEADING_TITLE_MAX_SINGLE_CHAR_TOKEN_FRACTION`] — a second net for
+///   equation fragments that a symbol scan alone might miss.
+fn numbered_heading_level(text: &str) -> Option<&'static str> {
+    if !starts_with_section_number(text) {
+        return None;
+    }
+    let t = text.trim_start();
+    let prefix_len = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .count();
+    let prefix = &t[..prefix_len];
+    let title = t[prefix_len..].trim_start();
+
+    if title.is_empty() {
+        return None;
+    }
+    if !title.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    if title.chars().any(|c| HEADING_TITLE_REJECT_SYMBOLS.contains(&c)) || contains_greek(title) {
+        return None;
+    }
+
+    let tokens: Vec<&str> = title.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let single_char_tokens = tokens.iter().filter(|t| t.chars().count() == 1).count();
+    if (single_char_tokens as f32 / tokens.len() as f32) > HEADING_TITLE_MAX_SINGLE_CHAR_TOKEN_FRACTION {
+        return None;
+    }
+
+    // Depth = number of dot-separated numeric components in the prefix
+    // ("1" -> 1, "3.1" -> 2, "3.2.1" -> 3). Trailing/stray dots (already
+    // guaranteed non-empty by `starts_with_section_number`) can't produce a
+    // zero count since the prefix contains at least one digit.
+    let depth = prefix.split('.').filter(|p| !p.is_empty()).count().max(1);
+    Some(match depth {
+        1 => "## ",
+        2 => "### ",
+        _ => "#### ",
+    })
 }
 
 /// True if `text`, once its leader punctuation (dots, ellipsis, spaces) is
@@ -1844,12 +1979,18 @@ fn render_region(
             && line_text.chars().count() <= 80
             && !(line_text.ends_with('.') || line_text.ends_with(','));
 
-        // Classify heading level: first try font size ratio (against the
-        // document-wide baseline, not this page's own median — see
-        // `document_body_size`), then ALL-CAPS heuristic. Image lines are
-        // never headings — they have no meaningful font size.
+        // Classify heading level: first try the numbered-section pattern
+        // (font-size-independent — see `numbered_heading_level`, which
+        // catches subsection headings typeset at body size), then font size
+        // ratio (against the document-wide baseline, not this page's own
+        // median — see `document_body_size`), then the ALL-CAPS heuristic.
+        // Image lines are never headings — they have no meaningful font size.
         let heading = if is_image_line {
             ""
+        } else if let Some(level) =
+            heading_shape_ok.then(|| numbered_heading_level(line_text)).flatten()
+        {
+            level
         } else if heading_shape_ok && max_font >= heading_body_size * 1.8 {
             "# "
         } else if heading_shape_ok && max_font >= heading_body_size * 1.4 {
@@ -1899,6 +2040,64 @@ mod tests {
     #[test]
     fn test_all_caps_heading_rejects_dot_leader() {
         assert!(!is_all_caps_heading("SECTION ONE...."));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_equation_fragments() {
+        // Real regressions: equation/table fragments that are short,
+        // upper-case and unpunctuated, but not genuine ALL-CAPS headings.
+        assert!(!is_all_caps_heading("QK T"));
+        assert!(!is_all_caps_heading("O (1) O (1)"));
+        assert!(!is_all_caps_heading("(A) 4 128 128"));
+        assert!(!is_all_caps_heading("G D"));
+        assert!(!is_all_caps_heading("GNMT + RL [38] 24.6 39.92"));
+    }
+
+    #[test]
+    fn test_all_caps_heading_rejects_cjk() {
+        // CJK has no letter case, so "zero lowercase letters" is vacuously
+        // true for every CJK line — requiring an ASCII uppercase letter is
+        // what actually makes this an ALL-CAPS *Latin* heading detector.
+        assert!(!is_all_caps_heading("工 作 經 驗"));
+        assert!(!is_all_caps_heading("台 北 市 文 山 區"));
+    }
+
+    #[test]
+    fn test_all_caps_heading_still_accepts_real_headings() {
+        assert!(is_all_caps_heading("ABSTRACT"));
+        assert!(is_all_caps_heading("INDEX TERMS"));
+        assert!(is_all_caps_heading("INTRODUCTION"));
+    }
+
+    #[test]
+    fn test_numbered_heading_level_detects_depth() {
+        assert_eq!(numbered_heading_level("1 Introduction"), Some("## "));
+        assert_eq!(numbered_heading_level("3.2 Attention"), Some("### "));
+        assert_eq!(
+            numbered_heading_level("3.2.1 Scaled Dot-Product Attention"),
+            Some("#### ")
+        );
+    }
+
+    #[test]
+    fn test_numbered_heading_level_rejects_non_headings() {
+        // Duration / date-shaped fragments (title not Title-Case-ASCII).
+        assert_eq!(numbered_heading_level("3 年"), None);
+        // Bare number (empty title).
+        assert_eq!(numbered_heading_level("705"), None);
+        // Numeric literal, not a section prefix in spirit.
+        assert_eq!(numbered_heading_level("1 . 0 · 10 20"), None);
+        // Inlined equation fragment (math symbols / mostly single-char tokens).
+        assert_eq!(
+            numbered_heading_level("1 X m h ∇ θ d log D x m i =1 end for"),
+            None
+        );
+        // Real regression: GAN's "4.1 Global Optimality of p g = p data" —
+        // math-polluted title, an accepted residual miss per the design.
+        assert_eq!(
+            numbered_heading_level("4.1 Global Optimality of p g = p data"),
+            None
+        );
     }
 
     #[test]
