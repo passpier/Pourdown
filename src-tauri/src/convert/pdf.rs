@@ -73,6 +73,12 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
 
     let hf_keys = detect_running_headers_footers(&pages);
     let repeated_images = detect_repeated_images(&pages);
+    // A document-wide, length-weighted body font size, used only for heading
+    // classification (see `document_body_size`) — more robust than any single
+    // page's median, which a reference-/equation-/caption-heavy page can drag
+    // below the true body size and cause every line on it to be misread as a
+    // heading.
+    let heading_body_size = document_body_size(&pages);
 
     // Pass 2: render each page, dropping any blocks identified as a repeated
     // running header/footer (text or image).
@@ -80,7 +86,7 @@ pub fn pdf_to_markdown(path: &str, media: &mut MediaSink) -> Result<String, Conv
     for page in &pages {
         let kept = filter_header_footer_blocks(&page.blocks, page.height, &hf_keys);
         let kept = filter_repeated_images(&kept, &repeated_images);
-        md.push_str(&render_page_blocks(&kept, &page.h_rules));
+        md.push_str(&render_page_blocks(&kept, &page.h_rules, heading_body_size));
         md.push('\n');
     }
 
@@ -1350,7 +1356,57 @@ fn extract_page_blocks(
 /// Renders one page's already-extracted (and header/footer-filtered) blocks
 /// as Markdown. Runs once per page in Pass 2, after
 /// [`detect_running_headers_footers`] has decided what to filter out.
-fn render_page_blocks(blocks: &[TextBlock], h_rules: &[f32]) -> String {
+/// A document-wide, length-weighted estimate of the "true" body font size,
+/// used only for heading font-ratio classification in `render_region` (never
+/// for geometry — line grouping, table/gutter detection keep using each
+/// page's own median, which is what they need).
+///
+/// A single page's median (see `render_page_blocks`) is weighted by *glyph-run
+/// count*, not text length, and includes image blocks (stored with
+/// `font_size: 0.0`). A page dense with equations, subscripts, figure
+/// captions, and reference markers — common in the back half of a long paper
+/// — can pack enough small-font runs to drag that median below the true body
+/// size, which then makes ordinary body lines clear the heading ratio
+/// threshold. Bucketing every text block's font size to the nearest 0.5pt and
+/// picking the bucket with the most total *characters* (not run count) finds
+/// the size the bulk of the document's prose actually uses, which a handful
+/// of caption-/equation-heavy pages can't skew.
+fn document_body_size(pages: &[PageContent]) -> f32 {
+    let mut weight_by_bucket: HashMap<i32, f32> = HashMap::new();
+    for page in pages {
+        for block in &page.blocks {
+            if block.is_image || block.font_size <= 0.0 {
+                continue;
+            }
+            let bucket = (block.font_size * 2.0).round() as i32;
+            let weight = block.text.chars().count().max(1) as f32;
+            *weight_by_bucket.entry(bucket).or_insert(0.0) += weight;
+        }
+    }
+
+    if let Some((&bucket, _)) = weight_by_bucket
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        return bucket as f32 / 2.0;
+    }
+
+    // No text blocks at all (e.g. an image-only document): fall back to the
+    // simple per-page median approach used elsewhere.
+    let mut sizes: Vec<f32> = pages
+        .iter()
+        .flat_map(|p| p.blocks.iter())
+        .map(|b| b.font_size)
+        .filter(|&s| s > 0.0)
+        .collect();
+    if sizes.is_empty() {
+        return 0.0;
+    }
+    sizes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sizes[sizes.len() / 2]
+}
+
+fn render_page_blocks(blocks: &[TextBlock], h_rules: &[f32], heading_body_size: f32) -> String {
     if blocks.is_empty() {
         return String::new();
     }
@@ -1369,6 +1425,16 @@ fn render_page_blocks(blocks: &[TextBlock], h_rules: &[f32]) -> String {
 
     let all_indices: Vec<usize> = (0..blocks.len()).collect();
 
+    // Font-ratio heading detection uses the document-wide baseline, not this
+    // page's own median — see `document_body_size`. Fall back to the
+    // per-page median for the rare page/document where the doc-wide estimate
+    // couldn't be computed (e.g. an image-only document).
+    let heading_body_size = if heading_body_size > 0.0 {
+        heading_body_size
+    } else {
+        body_size
+    };
+
     // Two-column journal layouts (IEEE Access and similar) put a left- and
     // right-column line at the same height; grouping purely by y (as
     // `render_region` does within a single region) would merge them into
@@ -1378,17 +1444,17 @@ fn render_page_blocks(blocks: &[TextBlock], h_rules: &[f32]) -> String {
     // a detected gutter splits the page into full-width dividers and
     // two-column bands, each rendered as its own region.
     match detect_gutter(blocks) {
-        None => render_region(blocks, &all_indices, body_size, h_rules),
+        None => render_region(blocks, &all_indices, body_size, heading_body_size, h_rules),
         Some(gutter) => {
             let mut out = String::new();
             for region in segment_page(blocks, gutter, body_size) {
                 match region {
                     Region::Full(indices) => {
-                        out.push_str(&render_region(blocks, &indices, body_size, h_rules));
+                        out.push_str(&render_region(blocks, &indices, body_size, heading_body_size, h_rules));
                     }
                     Region::TwoCol { left, right } => {
-                        out.push_str(&render_region(blocks, &left, body_size, h_rules));
-                        out.push_str(&render_region(blocks, &right, body_size, h_rules));
+                        out.push_str(&render_region(blocks, &left, body_size, heading_body_size, h_rules));
+                        out.push_str(&render_region(blocks, &right, body_size, heading_body_size, h_rules));
                     }
                 }
             }
@@ -1561,6 +1627,7 @@ fn render_region(
     blocks: &[TextBlock],
     indices: &[usize],
     body_size: f32,
+    heading_body_size: f32,
     h_rules: &[f32],
 ) -> String {
     if indices.is_empty() {
@@ -1756,23 +1823,44 @@ fn render_region(
             flush_paragraph(&mut out, &mut paragraph);
         }
 
-        // Classify heading level: first try font size ratio, then ALL-CAPS heuristic.
-        // Image lines are never headings — they have no meaningful font size.
+        // Computed up front (rather than only when `heading` turns out empty,
+        // as before) so the font-ratio shape guard below can see it. Does
+        // *not* suppress the ALL-CAPS heading path below — a lettered
+        // subsection heading like "J. ROADMAP FOR FUTURE RESEARCH"
+        // incidentally matches `is_list_marker`'s "single letter + '. '"
+        // shape too, and that ALL-CAPS branch already has its own
+        // length/punctuation guards (`is_all_caps_heading`) that make it safe
+        // to keep taking priority over the list read, exactly as before this
+        // change.
+        let is_list = !is_image_line && is_list_marker(line_text);
+
+        // Font-ratio heading candidates must also look like a heading in
+        // shape: not a bulleted/numbered list item, short, and not ending in
+        // sentence/wrap punctuation. Without this, a font-size baseline
+        // that's even slightly off (see `document_body_size`) can promote an
+        // ordinary wrapped sentence — or a large-font bullet — to a heading
+        // just because its font happens to clear the ratio.
+        let heading_shape_ok = !is_list
+            && line_text.chars().count() <= 80
+            && !(line_text.ends_with('.') || line_text.ends_with(','));
+
+        // Classify heading level: first try font size ratio (against the
+        // document-wide baseline, not this page's own median — see
+        // `document_body_size`), then ALL-CAPS heuristic. Image lines are
+        // never headings — they have no meaningful font size.
         let heading = if is_image_line {
             ""
-        } else if max_font >= body_size * 1.8 {
+        } else if heading_shape_ok && max_font >= heading_body_size * 1.8 {
             "# "
-        } else if max_font >= body_size * 1.4 {
+        } else if heading_shape_ok && max_font >= heading_body_size * 1.4 {
             "## "
-        } else if max_font >= body_size * 1.15 {
+        } else if heading_shape_ok && max_font >= heading_body_size * 1.15 {
             "### "
         } else if is_all_caps_heading(line_text) {
             "## "
         } else {
             ""
         };
-
-        let is_list = !is_image_line && heading.is_empty() && is_list_marker(line_text);
 
         if !heading.is_empty() || is_image_line || is_list {
             flush_paragraph(&mut out, &mut paragraph);
@@ -1857,6 +1945,16 @@ mod tests {
             font_size: 12.0,
             text: text.to_string(),
             is_image: false,
+        }
+    }
+
+    /// Like `text_block`, but with an explicit font size — used by tests that
+    /// exercise font-size-dependent behavior (heading detection,
+    /// `document_body_size`).
+    fn text_block_sized(x: f32, y: f32, text: &str, font_size: f32) -> TextBlock {
+        TextBlock {
+            font_size,
+            ..text_block(x, y, text)
         }
     }
 
@@ -2371,11 +2469,11 @@ mod tests {
         for region in segment_page(&blocks, gutter, body_size) {
             match region {
                 Region::Full(indices) => {
-                    out.push_str(&render_region(&blocks, &indices, body_size, &h_rules));
+                    out.push_str(&render_region(&blocks, &indices, body_size, body_size, &h_rules));
                 }
                 Region::TwoCol { left, right } => {
-                    out.push_str(&render_region(&blocks, &left, body_size, &h_rules));
-                    out.push_str(&render_region(&blocks, &right, body_size, &h_rules));
+                    out.push_str(&render_region(&blocks, &left, body_size, body_size, &h_rules));
+                    out.push_str(&render_region(&blocks, &right, body_size, body_size, &h_rules));
                 }
             }
         }
@@ -2661,5 +2759,98 @@ mod tests {
         let page = page_with_logo("![](assets/image1.png)");
         let kept = filter_repeated_images(&page.blocks, &HashSet::new());
         assert_eq!(kept.len(), page.blocks.len());
+    }
+
+    #[test]
+    fn test_document_body_size_ignores_page_dense_with_small_runs_and_images() {
+        // Simulates a reference-/equation-/caption-heavy page: lots of short
+        // small-font runs plus a zero-size image block, alongside a page of
+        // ordinary 12pt prose. A per-page median (like `render_page_blocks`
+        // computes) would be dragged down by the dense page; the document-wide
+        // baseline should still land on 12pt because that's where the bulk of
+        // the document's *characters* are.
+        let mut dense_page_blocks: Vec<TextBlock> = (0..30)
+            .map(|i| text_block_sized(0.0, 700.0 - i as f32 * 5.0, "x", 6.0))
+            .collect();
+        dense_page_blocks.push(TextBlock {
+            font_size: 0.0,
+            is_image: true,
+            ..text_block(0.0, 780.0, "![](assets/fig.png)")
+        });
+        let dense_page = PageContent {
+            blocks: dense_page_blocks,
+            h_rules: Vec::new(),
+            height: 800.0,
+        };
+
+        let prose_page = PageContent {
+            blocks: vec![text_block_sized(
+                0.0,
+                700.0,
+                "This is a long sentence of ordinary body text at the document's true body font size",
+                12.0,
+            )],
+            h_rules: Vec::new(),
+            height: 800.0,
+        };
+
+        let pages = vec![dense_page, prose_page];
+        let size = document_body_size(&pages);
+        assert_eq!(size, 12.0, "should anchor on the dominant body text, not the dense page's small runs");
+    }
+
+    #[test]
+    fn test_document_body_size_empty_pages_returns_zero() {
+        assert_eq!(document_body_size(&[]), 0.0);
+    }
+
+    #[test]
+    fn test_render_region_does_not_promote_long_lowercase_wrap_to_heading() {
+        // Regression test for the reported bug: a page/document-baseline
+        // mismatch previously let ordinary wrapped body lines clear the
+        // font-ratio heading threshold. Even if this line's font technically
+        // clears the ratio, its shape (long, lowercase start, no ending
+        // punctuation is irrelevant here — length is what should disqualify
+        // it) should keep it out of the heading path.
+        let blocks = vec![text_block_sized(
+            0.0,
+            500.0,
+            "one can introduce phase correcting elements into the zones as depicted in the figure below and this sentence runs long",
+            14.0,
+        )];
+        let indices = vec![0];
+        let body_size = 12.0;
+        let heading_body_size = 12.0; // ratio 14/12 ~= 1.17, clears the 1.15 "###" gate
+        let out = render_region(&blocks, &indices, body_size, heading_body_size, &[]);
+        assert!(
+            !out.trim_start().starts_with('#'),
+            "an over-length line should not become a heading even if font ratio clears the gate:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_render_region_large_font_bullet_is_list_not_heading() {
+        let blocks = vec![text_block_sized(0.0, 500.0, "• Goal Alignment with Human Values", 16.0)];
+        let indices = vec![0];
+        let body_size = 12.0;
+        let heading_body_size = 12.0;
+        let out = render_region(&blocks, &indices, body_size, heading_body_size, &[]);
+        assert!(
+            out.trim_start().starts_with("• "),
+            "a bulleted line should render as a list item, not a heading, regardless of font size:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_render_region_short_all_caps_still_becomes_heading() {
+        let blocks = vec![text_block(0.0, 500.0, "J. ROADMAP FOR FUTURE RESEARCH")];
+        let indices = vec![0];
+        let body_size = 12.0;
+        let heading_body_size = 12.0; // same font size as body: ratio path won't fire
+        let out = render_region(&blocks, &indices, body_size, heading_body_size, &[]);
+        assert!(
+            out.starts_with("## J. ROADMAP FOR FUTURE RESEARCH"),
+            "a genuine ALL-CAPS heading should still be promoted:\n{out}"
+        );
     }
 }
