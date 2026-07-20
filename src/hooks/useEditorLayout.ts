@@ -43,6 +43,15 @@ export function useEditorLayout(containerRef: React.RefObject<HTMLDivElement>) {
       const viewportWidth = container.clientWidth;
       const viewportHeight = container.clientHeight;
 
+      // Bail out (keep the last real metrics) when the container is
+      // zero-sized — this happens while its pane is `hidden` (EditorHost
+      // keeps inactive tabs/modes mounted but `display:none`). Without this,
+      // `availableWidth` goes negative and `contentWidth` collapses to 0,
+      // which then forces a visible reflow (and disturbs scroll restore)
+      // when the pane becomes visible again and this hook's ResizeObserver
+      // fires with the real size.
+      if (viewportWidth === 0 && viewportHeight === 0) return;
+
       // Detect scrollbars
       const hasVerticalScrollbar = container.scrollHeight > container.clientHeight;
       const hasHorizontalScrollbar = container.scrollWidth > container.clientWidth;

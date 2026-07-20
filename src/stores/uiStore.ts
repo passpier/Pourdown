@@ -9,8 +9,20 @@ import { useEditorStore } from '@/stores/editorStore';
 // they're the visible one (see `editorStore.ts`); calling it here right
 // before an editor-mode flip captures the outgoing instance's scroll
 // position while its DOM is still visible/laid-out.
+//
+// Wrapped in try/catch and called *before* (never inside) the `set` updater
+// below: with multiple documents' editor instances kept mounted (EditorHost),
+// the registered capturer can belong to an instance mid-transition whose DOM
+// measurement (e.g. `editor.view.nodeDOM`) throws. If that throw happened
+// inside a zustand `set` updater, `set` aborts entirely and `editorMode`
+// silently never flips — losing a scroll anchor must never block the mode
+// toggle itself.
 function captureActiveEditorAnchor(): void {
-  useEditorStore.getState().captureActiveAnchor?.();
+  try {
+    useEditorStore.getState().captureActiveAnchor?.();
+  } catch (error) {
+    console.error('Failed to capture editor scroll anchor before mode switch:', error);
+  }
 }
 
 interface UIState {
@@ -126,11 +138,12 @@ export const useUIStore = create<UIState>()(
         set({ editorMode: mode });
       },
 
-      toggleEditorMode: () =>
-        set((state) => {
-          captureActiveEditorAnchor();
-          return { editorMode: state.editorMode === 'wysiwyg' ? 'source' : 'wysiwyg' };
-        }),
+      toggleEditorMode: () => {
+        // Capture *before* calling `set`, not inside its updater — see
+        // `captureActiveEditorAnchor`'s doc comment above.
+        captureActiveEditorAnchor();
+        set((state) => ({ editorMode: state.editorMode === 'wysiwyg' ? 'source' : 'wysiwyg' }));
+      },
 
       initializeTheme: () => {
         const state = get();

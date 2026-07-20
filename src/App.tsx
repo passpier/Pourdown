@@ -46,7 +46,6 @@ function App() {
   const setPreferencesOpen = useUIStore((state) => state.setPreferencesOpen);
   const language = useSettingsStore((state) => state.language);
   const hasInitializedDocument = useRef(false);
-  const editor = useEditorStore((state) => state.editor);
   const menuUnlistenersRef = useRef<Array<() => void>>([]);
   const [importExportStatus, setImportExportStatus] = useState<{
     type: 'import' | 'export';
@@ -563,6 +562,13 @@ function App() {
   }, []);
 
   const runEditorCommand = (payload: { command: string; level?: number }) => {
+    // Read live rather than closing over a selector value: this keeps
+    // `editor` out of the `setupListeners` effect's deps below, so the ~15
+    // native-menu listeners aren't torn down and re-registered on every
+    // tab/mode switch (every switch changes which instance is registered as
+    // *the* global editor). Always targets whichever instance is currently
+    // active, same as before.
+    const editor = useEditorStore.getState().editor;
     if (!editor) return;
 
     const chain = editor.chain().focus();
@@ -691,7 +697,7 @@ function App() {
       menuUnlistenersRef.current.forEach(unlisten => unlisten());
       menuUnlistenersRef.current = [];
     };
-  }, [editor, activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, requestCloseDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport, setPreferencesOpen]);
+  }, [activeDocumentId, handleSaveAs, handleManualSave, createNewDocument, requestCloseDocument, toggleSidebar, setFindBarVisible, setSidebarVisible, requestSidebarSearchFocus, handleImport, handleExport, setPreferencesOpen]);
 
   // Enable/disable export menu items based on whether a document is active
   useEffect(() => {

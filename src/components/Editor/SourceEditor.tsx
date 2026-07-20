@@ -57,6 +57,13 @@ export const SourceEditor = ({ documentId, active }: SourceEditorProps) => {
   const scrollToHeadingRequest = useEditorStore((state) => state.scrollToHeadingRequest);
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Live-updated scrollTop, kept in sync on every scroll while this instance
+  // is visible (see the outline scroll-spy effect's `onScroll` below) — the
+  // fallback restore target for a tab switch. See the identical comment on
+  // `Editor.tsx`'s `savedScrollTopRef` for why: `display:none` (EditorHost
+  // hiding an inactive pane) clamps `scrollTop` to 0, so it must be captured
+  // before hiding, not read after becoming active again.
+  const savedScrollTopRef = useRef(0);
   const layoutMetrics = useEditorLayout(containerRef);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -199,12 +206,38 @@ export const SourceEditor = ({ documentId, active }: SourceEditorProps) => {
       requestAnimationFrame(() => attemptRestore(frame + 1, resolvedAnchor, target));
     };
 
+    // Re-assert a plain pixel scrollTop across a couple of frames, mirroring
+    // `attemptRestore`'s settle loop above — the textarea's width can still
+    // be settling for a frame or two after becoming visible.
+    const applyRawScrollTop = (frame: number, target: number, lastScrollTop: number | null) => {
+      if (cancelled) return;
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.scrollTop = target;
+      const stable =
+        frame >= MIN_SETTLE_FRAMES && lastScrollTop !== null && Math.abs(ta.scrollTop - lastScrollTop) < 1;
+      if (stable || frame >= MAX_SETTLE_FRAMES) return;
+      requestAnimationFrame(() => applyRawScrollTop(frame + 1, target, ta.scrollTop));
+    };
+
     requestAnimationFrame(() => {
       if (cancelled || hasRestoredAnchorRef.current) return;
       hasRestoredAnchorRef.current = true;
 
-      const resolvedAnchor = consumePendingAnchor();
-      if (!resolvedAnchor || resolvedAnchor.documentId !== documentIdRef.current) return;
+      const pending = useEditorStore.getState().pendingAnchor;
+      // Only consume an anchor captured for *this* document — a foreign one
+      // belongs to that document's own restore and must not be eaten here.
+      const resolvedAnchor =
+        pending && pending.documentId === documentIdRef.current ? consumePendingAnchor() : null;
+      if (!resolvedAnchor) {
+        // No mode-switch anchor for this document — tab switch (or first-ever
+        // open). Fall back to the last scrollTop this instance observed while
+        // visible (0 on first open, which is a no-op).
+        if (savedScrollTopRef.current > 0) {
+          applyRawScrollTop(0, savedScrollTopRef.current, null);
+        }
+        return;
+      }
       attemptRestore(0, resolvedAnchor, null);
     });
     return () => {
@@ -308,6 +341,10 @@ export const SourceEditor = ({ documentId, active }: SourceEditorProps) => {
     };
 
     const onScroll = () => {
+      // Recorded on every event, unthrottled — see `savedScrollTopRef`'s doc
+      // comment; this is the tab-switch scroll restore fallback, so it must
+      // reflect the position right up to the moment the pane is hidden.
+      savedScrollTopRef.current = textarea.scrollTop;
       if (rafId !== null) return;
       rafId = requestAnimationFrame(updateActiveHeading);
     };

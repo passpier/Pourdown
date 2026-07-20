@@ -66,6 +66,17 @@ export const Editor = memo(function Editor({ documentId, active }: EditorProps) 
   const findBarVisible = useUIStore((state) => state.findBarVisible);
   const setFindBarVisible = useUIStore((state) => state.setFindBarVisible);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Live-updated scrollTop, kept in sync on every scroll while this instance
+  // is visible (see the outline scroll-spy effect's `onScroll` below). Tab
+  // switches hide this pane via `display:none` (EditorHost), which clamps
+  // the container's real `scrollTop` to 0 and does not restore it on reveal
+  // — reading `container.scrollTop` *after* becoming active again is already
+  // too late. This ref is the fallback restore target for that case (see the
+  // anchor-restore effect's no-anchor branch): mode switches still use the
+  // captured `pendingAnchor` path, which is more precise (segment-based, not
+  // a raw pixel offset) and survives layout changes between capture and
+  // restore.
+  const savedScrollTopRef = useRef(0);
   const layoutMetrics = useEditorLayout(containerRef);
   const [hasMeasuredLayout, setHasMeasuredLayout] = useState(false);
   // Kept false until the anchor-restore settle loop finishes (or, if there's
@@ -460,15 +471,42 @@ export const Editor = memo(function Editor({ documentId, active }: EditorProps) 
       requestAnimationFrame(() => apply(frame + 1, anchor, target));
     };
 
+    // Re-assert a plain pixel scrollTop across a couple of frames, mirroring
+    // `apply`'s settle loop above — the reveal-time layout can still shift
+    // for a frame or two (see `useEditorLayout`'s width recompute), which
+    // would otherwise fight a single synchronous assignment.
+    const applyRawScrollTop = (frame: number, target: number, lastScrollTop: number | null) => {
+      if (cancelled) return;
+      const container = containerRef.current;
+      if (!container) return;
+      container.scrollTop = target;
+      const stable =
+        frame >= MIN_SETTLE_FRAMES && lastScrollTop !== null && Math.abs(container.scrollTop - lastScrollTop) < 1;
+      if (stable || frame >= MAX_SETTLE_FRAMES) {
+        setWidthTransitionEnabled(true);
+        return;
+      }
+      requestAnimationFrame(() => applyRawScrollTop(frame + 1, target, container.scrollTop));
+    };
+
     requestAnimationFrame(() => {
       if (cancelled || hasRestoredAnchorRef.current) return;
       hasRestoredAnchorRef.current = true;
 
-      const anchor = consumePendingAnchor();
-      if (!anchor || anchor.documentId !== documentId) {
-        // Nothing to restore (first-ever open of this document) — safe to
-        // enable the width transition immediately.
-        setWidthTransitionEnabled(true);
+      const pending = useEditorStore.getState().pendingAnchor;
+      // Only consume an anchor captured for *this* document — a foreign one
+      // (e.g. left over from switching some other document's mode) belongs to
+      // that document's own restore and must not be eaten here.
+      const anchor = pending && pending.documentId === documentId ? consumePendingAnchor() : null;
+      if (!anchor) {
+        // No mode-switch anchor for this document — this is a tab switch (or
+        // first-ever open). Fall back to the last scrollTop this instance
+        // observed while visible (0 on first open, which is a no-op).
+        if (savedScrollTopRef.current > 0) {
+          applyRawScrollTop(0, savedScrollTopRef.current, null);
+        } else {
+          setWidthTransitionEnabled(true);
+        }
         return;
       }
 
@@ -654,6 +692,11 @@ export const Editor = memo(function Editor({ documentId, active }: EditorProps) 
     };
 
     const onScroll = () => {
+      // Recorded on every event, unthrottled — this is the tab-switch scroll
+      // restore fallback (see `savedScrollTopRef`'s doc comment), so it must
+      // reflect the position right up to the moment the pane is hidden, not
+      // just whichever frame the rAF-throttled heading update lands on.
+      savedScrollTopRef.current = container.scrollTop;
       if (rafId !== null) return;
       rafId = requestAnimationFrame(updateActiveHeading);
     };
