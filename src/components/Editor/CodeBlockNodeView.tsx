@@ -300,8 +300,8 @@ export function CodeBlockNodeView({ node, deleteNode, updateAttributes }: NodeVi
         {toolbarVisible && toolbar}
         <div className="math-block-preview" contentEditable={false}>
           {mathError && (
-            <div className="math-error">
-              <strong>Math error:</strong> {mathError}
+            <div className="math-fallback" title={mathError}>
+              {code}
             </div>
           )}
           {!mathError && mathHtml && (

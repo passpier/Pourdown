@@ -1783,6 +1783,18 @@ struct PageContent {
     height: f32,
 }
 
+/// Strips the Unicode replacement character (U+FFFD), which pdfium emits in
+/// place of any glyph lacking a ToUnicode mapping — it never legitimately
+/// appears in real document text, only as an "undecodable glyph" marker. Left
+/// in place, it shows up verbatim in extracted text and, worse, inside a
+/// `$…$`/`$$…$$` math span (see [`block_is_math`]) where it's guaranteed to
+/// break KaTeX parsing with an "Unexpected character" error (seen on the GAN
+/// paper's Algorithm 1, whose formulas are typeset in a Computer Modern math
+/// font pdfium couldn't fully map to Unicode).
+fn strip_undecodable(text: &str) -> String {
+    text.chars().filter(|&c| c != '\u{FFFD}').collect()
+}
+
 /// Extracts one page's positioned text/image blocks (no layout analysis or
 /// rendering yet). Runs once per page in Pass 1, before cross-page
 /// header/footer detection.
@@ -1794,7 +1806,7 @@ fn extract_page_blocks(
 
     for obj in page.objects().iter() {
         if let Some(text_obj) = obj.as_text_object() {
-            let text = text_obj.text();
+            let text = strip_undecodable(&text_obj.text());
             if text.trim().is_empty() {
                 continue;
             }
@@ -2494,6 +2506,24 @@ fn render_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_strip_undecodable_removes_replacement_chars() {
+        // Reproduces the GAN-paper "Unexpected character: '�'" KaTeX error:
+        // pdfium emits U+FFFD for glyphs it can't map to Unicode, which then
+        // lands inside a `$$…$$` math span and breaks parsing.
+        assert_eq!(strip_undecodable("1 X m h \u{FFFD}"), "1 X m h ");
+    }
+
+    #[test]
+    fn test_strip_undecodable_all_replacement_chars_collapses_to_empty() {
+        assert_eq!(strip_undecodable("\u{FFFD}\u{FFFD}\u{FFFD}"), "");
+    }
+
+    #[test]
+    fn test_strip_undecodable_leaves_ordinary_text_untouched() {
+        assert_eq!(strip_undecodable("∇θ log D(x)"), "∇θ log D(x)");
+    }
 
     #[test]
     fn test_all_caps_heading_positive() {

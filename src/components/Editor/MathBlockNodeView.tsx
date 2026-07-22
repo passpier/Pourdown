@@ -92,8 +92,8 @@ export function MathBlockNodeView({ node, deleteNode }: NodeViewProps) {
         onClick={() => setSourceOpen(true)}
       >
         {error && (
-          <div className="math-error">
-            <strong>Math error:</strong> {error}
+          <div className="math-fallback" title={error}>
+            {latex}
           </div>
         )}
         {!error && html && <div className="math-katex" dangerouslySetInnerHTML={{ __html: html }} />}

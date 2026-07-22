@@ -95,7 +95,11 @@ export function MathInlineNodeView({ node, updateAttributes, selected }: NodeVie
       contentEditable={false}
       onClick={startEditing}
     >
-      {error && <span className="math-error math-error-inline">{error}</span>}
+      {error && (
+        <span className="math-fallback-inline" title={error}>
+          {latex}
+        </span>
+      )}
       {!error && html && <span className="math-katex" dangerouslySetInnerHTML={{ __html: html }} />}
       {!error && !html && <span className="math-status">$…$</span>}
     </NodeViewWrapper>
